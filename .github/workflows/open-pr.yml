@@ -27,5 +27,6 @@ jobs:
               --base main \
               --head "$BRANCH" \
               --title "Auto PR: $BRANCH" \
-              --body "Pull request creado automáticamente para revisar cambios antes de integrar a main."
+              --body "Pull request creado automáticamente para revisar cambios antes de integrar a main." \
+              --reviewer Copilot
           fi
