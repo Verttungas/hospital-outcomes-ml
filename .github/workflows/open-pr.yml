@@ -1,0 +1,30 @@
+name: Open PR on branch push
+
+on:
+  push:
+    branches-ignore:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  open-pr:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create pull request if missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          if gh pr view "$BRANCH" --base main >/dev/null 2>&1; then
+            echo "PR already exists for branch $BRANCH"
+          else
+            gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "Auto PR: $BRANCH" \
+              --body "Pull request creado automáticamente para revisar cambios antes de integrar a main."
+          fi
