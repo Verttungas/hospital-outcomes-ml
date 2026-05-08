@@ -16,7 +16,7 @@ jobs:
     steps:
       - name: Create pull request if missing
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PR_AUTHOR_TOKEN }}
           GH_REPO: ${{ github.repository }}
           BRANCH: ${{ github.ref_name }}
         run: |
