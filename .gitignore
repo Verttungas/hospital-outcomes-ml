@@ -1,0 +1,15 @@
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+
+*.rds
+*.RData
+*.Rproj
+
+data/raw/
+data/private/
+models/*.rds
+
+.DS_Store
+Thumbs.db
