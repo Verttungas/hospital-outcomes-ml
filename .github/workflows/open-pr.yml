@@ -17,9 +17,10 @@ jobs:
       - name: Create pull request if missing
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           BRANCH: ${{ github.ref_name }}
         run: |
-          if gh pr view "$BRANCH" --base main >/dev/null 2>&1; then
+          if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
             echo "PR already exists for branch $BRANCH"
           else
             gh pr create \
