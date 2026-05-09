@@ -82,7 +82,7 @@ mapear_cie10 <- function(codigo) {
   dplyr::case_when(
     primera %in% c("A", "B")                          ~ "I_Infecciosas",
     primera == "C"                                   ~ "II_Neoplasias",
-    primera == "D" & !is.na(dos_digitos) & dos_digitos <= 48 ~ "II_Neoplasias",
+    primera == "D" & !is.na(dos_digitos) & dos_digitos <= 49 ~ "II_Neoplasias",
     primera == "D" & !is.na(dos_digitos) & dos_digitos >= 50 & dos_digitos <= 89 ~ "III_SangreInmunidad",
     primera == "E"                                   ~ "IV_Endocrinas",
     primera == "F"                                   ~ "V_Mental",
@@ -108,7 +108,7 @@ mapear_cie10 <- function(codigo) {
 }
 
 # Datos necesitan estar presentes en la carpeta /data, esto se necesita hacer
-# manualmente porque el contendido de la carpeta esta en .gitignore. 
+# manualmente porque el contenido de la carpeta está en .gitignore. 
 df_raw <- read.csv(
   "data/TF_defunciones.csv",
   stringsAsFactors = FALSE,
@@ -295,7 +295,7 @@ La tasa de defunción varía del 17.4 % en septiembre al 21.9 % en enero — un 
 
 # Referencias
 
-- Organización Mundial de la Salud. (2019). *Clasificación Internacional de Enfermedades, 11.ª revisión*. https://icd.who.int/es/docs/icd11factsheet_es.pdf
+- Organización Mundial de la Salud. (2016). *Clasificación Internacional de Enfermedades, 10.ª revisión (CIE-10).* https://icd.who.int/browse10/2019/en
 - Secretaría de Salud. (2014). *Registro de Egresos Hospitalarios*. DGIS. https://www.gob.mx/salud
 - Kuhn, M. (2024). *The caret Package*. https://topepo.github.io/caret/
 - Anthropic. (2026). Claude (claude-sonnet-4-6) [Modelo de lenguaje grande]. https://claude.ai
