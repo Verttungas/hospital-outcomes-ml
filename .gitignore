@@ -7,9 +7,12 @@
 *.RData
 *.Rproj
 
-data/raw/
-data/private/
+data/*
 models/*.rds
 
 .DS_Store
 Thumbs.db
+.positai
+
+*.html
+
