@@ -1,0 +1,293 @@
+---
+title: "Trabajo Final — Proceso de Machine Learning para egresos hospitalarios SSA 2014"
+author: "Nicolás Barrón Sour"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-title: "Contenido"
+    number-sections: true
+    theme: cosmo
+    code-fold: true
+    code-tools: true
+embed-resources: true
+editor: source
+date: 2026-05-09
+---
+
+## Librerías
+
+```{r}
+#| message: false
+#| warning: false
+library(tidyverse)
+library(tibble)
+library(knitr)
+library(dplyr)
+library(scales)
+
+comma <- scales::comma
+percent <- scales::percent
+```
+
+# Parte 1: Entender negocio y datos
+
+## Objetivo del trabajo
+
+El objetivo de este trabajo es construir y evaluar un modelo de clasificación binaria que prediga si un paciente que ingresó a un hospital de la Secretaría de Salud (SSA) de México en 2014 egresará por **Mejoría** o por **Defunción**, siendo esta última el caso positivo de interés clínico. Para lograrlo se seguirá la metodología **CRISP-ML**: se realizará un análisis exploratorio del *dataset* de 94,493 egresos hospitalarios, se preparará el conjunto mediante limpieza, corrección de anomalías de captura e ingeniería de características, y se entrenarán seis algoritmos de clasificación (kNN, Naive Bayes, Árbol de decisión, Regresión Logística, SVM y Red Neuronal). El mejor modelo será evaluado en un conjunto de prueba independiente y desplegado en un script autónomo.
+
+## Términos del dominio
+
+| Término | Definición |
+|---------|------------|
+| **CIE-10** | Clasificación Internacional de Enfermedades, 10.ª revisión (OMS). Codifica diagnósticos en 22 capítulos mediante una letra + hasta 4 dígitos (ej. `I219` = infarto agudo). |
+| **SSA** | Secretaría de Salud. Atiende a población sin seguridad social formal. |
+| **Egreso hospitalario** | Evento de salida del paciente de la unidad médica (Mejoría, Defunción, Traslado, etc.). |
+| **IMSS / ISSSTE** | Instituciones de seguridad social para trabajadores formales y empleados de gobierno. |
+| **Seguro Popular** | Cobertura médica pública (2003-2019) para población sin seguridad social. |
+| **Defunción** | Egreso por muerte dentro del hospital. **Caso positivo** en este proyecto. |
+| **DIAS_ESTANCIA** | Días entre ingreso y egreso del paciente. |
+
+## Clasificación de las variables
+
+```{r}
+#| echo: false
+tibble::tribble(
+  ~Variable,       ~`Tipo estadístico`, ~`Tipo de medición`,      ~Notas,
+  "ESTADO",        "Cualitativa",       "Nominal",                 "34 valores — se agrupa por región",
+  "GENERO",        "Cualitativa",       "Nominal",                 "FEMENINO / MASCULINO / N.E. (7 obs)",
+  "EDAD",          "Cuantitativa",      "Intervalo discreto",      "Años cumplidos; max=130 (error captura)",
+  "PESO",          "Cuantitativa",      "Intervalo continuo",      "Kg; 24.6% NA + anomalía Sinaloa (PESO=99)",
+  "ALTURA",        "Cuantitativa",      "Intervalo continuo",      "Cm; 25.3% NA",
+  "INDIGENA",      "Cualitativa",       "Nominal",                 "No / Sí / No responde / No sabe",
+  "DIAS_ESTANCIA", "Cuantitativa",      "Intervalo discreto",      "Días; max=12,845 (error captura)",
+  "ASEGURADO",     "Cualitativa",       "Nominal",                 "12 categorías — se agrupa",
+  "INFECCION",     "Cualitativa",       "Nominal",                 "Binaria: SI / NO",
+  "ACCIDENTE",     "Cualitativa",       "Nominal",                 "11 categorías — se binariza",
+  "EGRESO",        "Cualitativa",       "Nominal (respuesta)",     "Mejoría / Defunción",
+  "CIE10",         "Cualitativa",       "Nominal",                 "3,199 códigos — se mapea a 22 capítulos",
+  "MES_INGRESO",   "Cualitativa",       "Ordinal",                 "12 meses con orden natural de calendario"
+) |> kable()
+```
+
+## Carga y análisis exploratorio de datos
+
+```{r}
+mapear_cie10 <- function(codigo) {
+  primera <- substr(toupper(as.character(codigo)), 1, 1)
+  dplyr::case_when(
+    primera %in% c("A", "B") ~ "I_Infecciosas",
+    primera == "C"            ~ "II_Neoplasias",
+    primera == "D"            ~ "III_SangreInmunidad",
+    primera == "E"            ~ "IV_Endocrinas",
+    primera == "F"            ~ "V_Mental",
+    primera == "G"            ~ "VI_Nervioso",
+    primera == "H"            ~ "VII_OjoOido",
+    primera == "I"            ~ "IX_Circulatorio",
+    primera == "J"            ~ "X_Respiratorio",
+    primera == "K"            ~ "XI_Digestivo",
+    primera == "L"            ~ "XII_Piel",
+    primera == "M"            ~ "XIII_Musculoesqueletico",
+    primera == "N"            ~ "XIV_Genitourinario",
+    primera == "O"            ~ "XV_Embarazo",
+    primera == "P"            ~ "XVI_Perinatal",
+    primera == "Q"            ~ "XVII_Congenitas",
+    primera == "R"            ~ "XVIII_SintomasSignos",
+    primera %in% c("S", "T") ~ "XIX_Traumatismos",
+    primera %in% c("V", "W", "X", "Y") ~ "XX_CausasExternas",
+    primera == "Z"            ~ "XXI_FactoresSalud",
+    primera == "U"            ~ "XXII_Especiales",
+    TRUE                      ~ "OTRO"
+  )
+}
+
+df_raw <- read.csv(
+  "data/TF_defunciones.csv",
+  stringsAsFactors = FALSE,
+  na.strings        = c("", "NA")
+) |>
+  mutate(
+    EGRESO    = factor(EGRESO, levels = c("Defuncion", "Mejoria")),
+    CIE10_CAP = mapear_cie10(CIE10)
+  )
+
+cat("Dimensiones:", nrow(df_raw), "×", ncol(df_raw), "\n")
+cat("\nValores faltantes por columna:\n")
+print(colSums(is.na(df_raw)))
+```
+
+### Distribución de la variable objetivo
+
+```{r}
+df_raw |>
+  count(EGRESO) |>
+  mutate(Pct = round(100 * n / sum(n), 1)) |>
+  ggplot(aes(x = EGRESO, y = n, fill = EGRESO)) +
+  geom_col(width = 0.45, show.legend = FALSE) +
+  geom_text(aes(label = paste0(comma(n), "\n(", Pct, " %)")),
+            vjust = -0.3, size = 4) +
+  scale_fill_manual(values = c("Defuncion" = "#d6604d", "Mejoria" = "#4393c3")) +
+  scale_y_continuous(labels = comma, limits = c(0, 90000)) +
+  labs(title = "Distribución de EGRESO",
+       subtitle = "Desbalance 19% / 81%  |  Tasa base (ZeroR) = 80.9 %",
+       x = NULL, y = "Observaciones") +
+  theme_minimal(base_size = 13)
+```
+
+### Variables cuantitativas — distribución y relación con EGRESO
+
+```{r}
+#| warning: false
+#| fig-height: 7
+
+p_edad <- ggplot(df_raw, aes(x = EGRESO, y = EDAD, fill = EGRESO)) +
+  geom_boxplot(show.legend = FALSE, outlier.shape = 21, outlier.size = 1) +
+  scale_fill_manual(values = c("Defuncion" = "#d6604d", "Mejoria" = "#4393c3")) +
+  labs(title = "EDAD", x = NULL) + theme_minimal(base_size = 11)
+
+p_dias <- ggplot(df_raw, aes(x = EGRESO, y = DIAS_ESTANCIA + 1, fill = EGRESO)) +
+  geom_boxplot(show.legend = FALSE, outlier.shape = 21, outlier.size = 1) +
+  scale_y_log10(labels = comma) +
+  scale_fill_manual(values = c("Defuncion" = "#d6604d", "Mejoria" = "#4393c3")) +
+  labs(title = "DIAS_ESTANCIA (log)", x = NULL, y = "Días + 1") +
+  theme_minimal(base_size = 11)
+
+p_peso <- ggplot(df_raw |> filter(!is.na(PESO), !(ESTADO == "Sinaloa" & PESO == 99)),
+                 aes(x = EGRESO, y = PESO, fill = EGRESO)) +
+  geom_boxplot(show.legend = FALSE, outlier.shape = 21, outlier.size = 1) +
+  scale_fill_manual(values = c("Defuncion" = "#d6604d", "Mejoria" = "#4393c3")) +
+  labs(title = "PESO (sin anomalía Sinaloa)", x = NULL) +
+  theme_minimal(base_size = 11)
+
+p_altura <- ggplot(df_raw |> filter(!is.na(ALTURA), ALTURA > 30),
+                   aes(x = EGRESO, y = ALTURA, fill = EGRESO)) +
+  geom_boxplot(show.legend = FALSE, outlier.shape = 21, outlier.size = 1) +
+  scale_fill_manual(values = c("Defuncion" = "#d6604d", "Mejoria" = "#4393c3")) +
+  labs(title = "ALTURA", x = NULL) + theme_minimal(base_size = 11)
+
+gridExtra::grid.arrange(p_edad, p_dias, p_peso, p_altura, ncol = 2)
+```
+
+```{r}
+df_raw |>
+  group_by(EGRESO) |>
+  summarise(
+    EDAD_med   = median(EDAD),
+    DIAS_med   = median(DIAS_ESTANCIA),
+    PESO_med   = median(PESO, na.rm = TRUE),
+    ALTURA_med = median(ALTURA, na.rm = TRUE)
+  ) |>
+  kable(digits = 1, caption = "Medianas de variables cuantitativas por EGRESO")
+```
+
+### Variables cualitativas — distribución y relación con EGRESO
+
+```{r}
+#| fig-height: 8
+
+g_gen <- df_raw |>
+  filter(GENERO != "N.E.") |>
+  count(GENERO, EGRESO) |>
+  ggplot(aes(x = GENERO, y = n, fill = EGRESO)) +
+  geom_col(position = "fill", width = 0.5) +
+  scale_y_continuous(labels = percent) +
+  scale_fill_manual(values = c("Defuncion" = "#d6604d", "Mejoria" = "#4393c3")) +
+  labs(title = "GENERO", x = NULL, y = NULL, fill = NULL) +
+  theme_minimal(base_size = 11) + theme(legend.position = "bottom")
+
+g_inf <- df_raw |>
+  count(INFECCION, EGRESO) |>
+  ggplot(aes(x = INFECCION, y = n, fill = EGRESO)) +
+  geom_col(position = "fill", width = 0.5) +
+  scale_y_continuous(labels = percent) +
+  scale_fill_manual(values = c("Defuncion" = "#d6604d", "Mejoria" = "#4393c3")) +
+  labs(title = "INFECCION", x = NULL, y = NULL, fill = NULL) +
+  theme_minimal(base_size = 11) + theme(legend.position = "bottom")
+
+g_ind <- df_raw |>
+  count(INDIGENA, EGRESO) |>
+  ggplot(aes(x = INDIGENA, y = n, fill = EGRESO)) +
+  geom_col(position = "fill", width = 0.7) +
+  scale_y_continuous(labels = percent) +
+  scale_fill_manual(values = c("Defuncion" = "#d6604d", "Mejoria" = "#4393c3")) +
+  labs(title = "INDIGENA", x = NULL, y = NULL, fill = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        legend.position = "bottom")
+
+g_acc <- df_raw |>
+  mutate(ACC = if_else(ACCIDENTE == "NO APLICA", "No", "Si")) |>
+  count(ACC, EGRESO) |>
+  ggplot(aes(x = ACC, y = n, fill = EGRESO)) +
+  geom_col(position = "fill", width = 0.5) +
+  scale_y_continuous(labels = percent) +
+  scale_fill_manual(values = c("Defuncion" = "#d6604d", "Mejoria" = "#4393c3")) +
+  labs(title = "ACCIDENTE (binario)", x = NULL, y = NULL, fill = NULL) +
+  theme_minimal(base_size = 11) + theme(legend.position = "bottom")
+
+gridExtra::grid.arrange(g_gen, g_inf, g_ind, g_acc, ncol = 2)
+```
+
+### CIE-10 por capítulo — tasa de Defunción
+
+```{r}
+#| fig-height: 6
+df_raw |>
+  count(CIE10_CAP, EGRESO) |>
+  pivot_wider(names_from = EGRESO, values_from = n, values_fill = 0) |>
+  mutate(
+    Total   = Defuncion + Mejoria,
+    Pct_Def = round(100 * Defuncion / Total, 1)
+  ) |>
+  ggplot(aes(x = Pct_Def, y = reorder(CIE10_CAP, Pct_Def), fill = Pct_Def)) +
+  geom_col(width = 0.7) +
+  scale_fill_gradient(low = "#fee090", high = "#d73027", guide = "none") +
+  geom_text(aes(label = paste0(Pct_Def, " %  (n=", comma(Total), ")")),
+            hjust = -0.05, size = 2.8) +
+  expand_limits(x = 90) +
+  labs(title = "Tasa de Defunción por Capítulo CIE-10",
+       x = "% Defunción", y = NULL) +
+  theme_minimal(base_size = 10)
+```
+
+
+## Hallazgos
+
+**1. Desbalance de clases moderado, explicado por diagnósticos obstétricos.**
+El dataset contiene 18,010 Defunciones (19.06 %) y 76,483 Mejorías (80.94 %). La tasa base del clasificador trivial es 80.94 %, umbral mínimo que todo modelo debe superar. El origen del desbalance es el Capítulo XV (Embarazo y parto), con 34,137 casos y una tasa de defunción de apenas 0.1 % — el grupo más numeroso con la mortalidad más baja. La métrica de evaluación principal será ROC-AUC y no accuracy.
+
+**2. CIE-10 es el predictor con mayor poder discriminante.**
+Los 3,199 códigos únicos se agrupan en 22 capítulos con tasas de defunción que van del 0.1 % (XV, Embarazo) al 73 % (XVIII, Síntomas y signos anormales). Los cinco capítulos más letales son: XVIII\_SintomasSignos (73 %, n=2,457), I\_Infecciosas (68.6 %, n=2,115), IX\_Circulatorio (66.1 %, n=3,815), II\_Neoplasias (53.4 %, n=2,023) y X\_Respiratorio (53.2 %, n=4,715). Los más benignos son VII\_OjoOido y XV\_Embarazo, ambos con 0.1 %. Esta variable por sí sola estructura prácticamente todo el espacio de riesgo.
+
+**3. INFECCION es la señal binaria individual más fuerte.**
+Solo 1,213 casos (1.3 % del total) presentaron infección intrahospitalaria, pero su tasa de defunción es 64.5 % frente al 18.5 % sin infección — una separación de 46 puntos porcentuales.
+
+**4. EDAD y DIAS_ESTANCIA son los mejores predictores cuantitativos.**
+Los pacientes fallecidos tienen mediana de 54 años (media 48.7) frente a 25 años (media 29.9) en alta por mejoría. La estancia hospitalaria presenta mediana de 4 días en defunciones versus 1 día en mejorías. Ambas variables tienen valores máximos imposibles que se corregirán en preprocesamiento: EDAD = 130 y DIAS_ESTANCIA = 12,845 días.
+
+**5. Anomalía sistemática de captura en Sinaloa.**
+De los 4,696 registros del estado, 1,843 (39.2 %) tienen exactamente PESO = 99.0 kg — valor por defecto del sistema de captura hospitalaria. Se imputarán como NA antes de calcular cualquier percentil, ya que de lo contrario distorsionarían el P99 de PESO y la imputación posterior.
+
+**6. GENERO muestra una diferencia sustancial confundida con la composición diagnóstica.**
+Los hombres tienen una tasa de defunción del 30.8 % (n=31,773) frente al 13.1 % de las mujeres (n=62,713). La diferencia está parcialmente confundida con el Capítulo XV: las mujeres dominan los 34,137 egresos obstétricos de mortalidad mínima. La categoría N.E. (7 registros, 85.7 %) se eliminará por tener menos de 10 observaciones.
+
+**7. Sesgo de registro sistemático por estado — hallazgo crítico de calidad de datos.**
+Tabasco presenta 99.9 % de defunción (n=719), Coahuila de Zaragoza 98.8 % (n=515) y San Luis Potosí 97.3 % (n=777). Ningún hospital opera con tasas cercanas al 100 %; lo más probable es que estos estados enviaron a la DGIS únicamente los registros de defunción, omitiendo los egresos por mejoría. Esto invalida ESTADO como predictor geográfico directo y justifica su agrupación por región.
+
+**8. ASEGURADO = GRATUIDAD tiene 100 % de defunción en 105 casos.**
+Al igual que el hallazgo de ESTADO, esto señala un sesgo de registro y no un patrón clínico real. PROSPERA tiene 0 % de defunción en 39 casos, en el extremo opuesto. Ambas categorías, junto con SEDENA (n=11), PEMEX (n=15) y SECMAR (n=5), se consolidarán en grupos más amplios. La categoría principal es SEGURO POPULAR con 56,937 registros y 18.3 % de defunción.
+
+**9. INDIGENA muestra diferencias reales con una categoría de imputación compleja.**
+Los pacientes identificados como indígenas tienen 35.5 % de defunción (n=1,137), "No sabe" 30.4 % (n=1,362), y "No" 20.0 % (n=81,762). La categoría "No responde" tiene solo 8.0 % (n=10,232), probablemente pacientes que ingresaron por procedimientos electivos. Esta distribución sugiere que "No responde" no es equivalente a dato faltante y debe conservarse como categoría propia.
+
+**10. MES_INGRESO tiene variación estacional moderada pero consistente.**
+La tasa de defunción varía del 17.4 % en septiembre al 21.9 % en enero — un rango de 4.5 puntos porcentuales. Los meses de invierno presentan mayor mortalidad, consistente con el patrón epidemiológico de enfermedades respiratorias e infecciosas. La variable se conservará dado su costo computacional nulo y su potencial de capturar efectos estacionales.
+
+---
+
+# Referencias
+
+- Organización Mundial de la Salud. (2019). *Clasificación Internacional de Enfermedades, 11.ª revisión*. https://icd.who.int/es/docs/icd11factsheet_es.pdf
+- Secretaría de Salud. (2014). *Registro de Egresos Hospitalarios*. DGIS. https://www.gob.mx/salud
+- Kuhn, M. (2024). *The caret Package*. https://topepo.github.io/caret/
+- Anthropic. (2026). Claude (claude-sonnet-4-6) [Modelo de lenguaje grande]. https://claude.ai
