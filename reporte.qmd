@@ -25,6 +25,7 @@ library(tibble)
 library(knitr)
 library(dplyr)
 library(scales)
+library(gridExtra)
 
 comma <- scales::comma
 percent <- scales::percent
@@ -106,6 +107,8 @@ mapear_cie10 <- function(codigo) {
   )
 }
 
+# Datos necesitan estar presentes en la carpeta /data, esto se necesita hacer
+# manualmente porque el contendido de la carpeta esta en .gitignore. 
 df_raw <- read.csv(
   "data/TF_defunciones.csv",
   stringsAsFactors = FALSE,
