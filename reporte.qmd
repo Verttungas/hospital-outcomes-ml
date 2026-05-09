@@ -74,30 +74,35 @@ tibble::tribble(
 
 ```{r}
 mapear_cie10 <- function(codigo) {
-  primera <- substr(toupper(as.character(codigo)), 1, 1)
+  codigo_limpio <- toupper(trimws(as.character(codigo)))
+  primera <- substr(codigo_limpio, 1, 1)
+  dos_digitos <- suppressWarnings(as.integer(substr(codigo_limpio, 2, 3)))
+
   dplyr::case_when(
-    primera %in% c("A", "B") ~ "I_Infecciosas",
-    primera == "C"            ~ "II_Neoplasias",
-    primera == "D"            ~ "III_SangreInmunidad",
-    primera == "E"            ~ "IV_Endocrinas",
-    primera == "F"            ~ "V_Mental",
-    primera == "G"            ~ "VI_Nervioso",
-    primera == "H"            ~ "VII_OjoOido",
-    primera == "I"            ~ "IX_Circulatorio",
-    primera == "J"            ~ "X_Respiratorio",
-    primera == "K"            ~ "XI_Digestivo",
-    primera == "L"            ~ "XII_Piel",
-    primera == "M"            ~ "XIII_Musculoesqueletico",
-    primera == "N"            ~ "XIV_Genitourinario",
-    primera == "O"            ~ "XV_Embarazo",
-    primera == "P"            ~ "XVI_Perinatal",
-    primera == "Q"            ~ "XVII_Congenitas",
-    primera == "R"            ~ "XVIII_SintomasSignos",
-    primera %in% c("S", "T") ~ "XIX_Traumatismos",
-    primera %in% c("V", "W", "X", "Y") ~ "XX_CausasExternas",
-    primera == "Z"            ~ "XXI_FactoresSalud",
-    primera == "U"            ~ "XXII_Especiales",
-    TRUE                      ~ "OTRO"
+    primera %in% c("A", "B")                          ~ "I_Infecciosas",
+    primera == "C"                                   ~ "II_Neoplasias",
+    primera == "D" & !is.na(dos_digitos) & dos_digitos <= 48 ~ "II_Neoplasias",
+    primera == "D" & !is.na(dos_digitos) & dos_digitos >= 50 & dos_digitos <= 89 ~ "III_SangreInmunidad",
+    primera == "E"                                   ~ "IV_Endocrinas",
+    primera == "F"                                   ~ "V_Mental",
+    primera == "G"                                   ~ "VI_Nervioso",
+    primera == "H" & !is.na(dos_digitos) & dos_digitos <= 59 ~ "VII_Ojo",
+    primera == "H" & !is.na(dos_digitos) & dos_digitos >= 60 & dos_digitos <= 95 ~ "VIII_Oido",
+    primera == "I"                                   ~ "IX_Circulatorio",
+    primera == "J"                                   ~ "X_Respiratorio",
+    primera == "K"                                   ~ "XI_Digestivo",
+    primera == "L"                                   ~ "XII_Piel",
+    primera == "M"                                   ~ "XIII_Musculoesqueletico",
+    primera == "N"                                   ~ "XIV_Genitourinario",
+    primera == "O"                                   ~ "XV_Embarazo",
+    primera == "P"                                   ~ "XVI_Perinatal",
+    primera == "Q"                                   ~ "XVII_Congenitas",
+    primera == "R"                                  ~ "XVIII_SintomasSignos",
+    primera %in% c("S", "T")                        ~ "XIX_Traumatismos",
+    primera %in% c("V", "W", "X", "Y")             ~ "XX_CausasExternas",
+    primera == "Z"                                  ~ "XXI_FactoresSalud",
+    primera == "U"                                  ~ "XXII_Especiales",
+    TRUE                                            ~ "OTRO"
   )
 }
 
