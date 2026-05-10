@@ -26,6 +26,7 @@ library(knitr)
 library(dplyr)
 library(scales)
 library(gridExtra)
+library(caret)
 
 comma <- scales::comma
 percent <- scales::percent
@@ -262,7 +263,7 @@ df_raw |>
 
 **1. Desbalance de clases moderado, explicado por diagnósticos obstétricos.** El dataset contiene 18,010 Defunciones (19.06 %) y 76,483 Mejorías (80.94 %). La tasa base del clasificador trivial es 80.94 %, umbral mínimo que todo modelo debe superar. El origen del desbalance es el Capítulo XV (Embarazo y parto), con 34,137 casos y una tasa de defunción de apenas 0.1 % — el grupo más numeroso con la mortalidad más baja. La métrica de evaluación principal será ROC-AUC y no accuracy.
 
-**2. CIE-10 es el predictor con mayor poder discriminante.** Los 3,199 códigos únicos se agrupan en 22 capítulos con tasas de defunción que van del 0.1 % (XV, Embarazo) al 73 % (XVIII, Síntomas y signos anormales). Los cinco capítulos más letales son: XVIII_SintomasSignos (73 %, n=2,457), I_Infecciosas (68.6 %, n=2,115), IX_Circulatorio (66.1 %, n=3,815), II_Neoplasias (53.4 %, n=2,023) y X_Respiratorio (53.2 %, n=4,715). Los más benignos son VII_OjoOido y XV_Embarazo, ambos con 0.1 %. Esta variable por sí sola estructura prácticamente todo el espacio de riesgo.
+**2. CIE-10 es el predictor con mayor poder discriminante.** Los 3,199 códigos únicos se agrupan en 22 capítulos con tasas de defunción que van del 0.1 % (XV, Embarazo) al 73 % (XVIII, Síntomas y signos anormales). Los cinco capítulos más letales son: XVIII_SintomasSignos (73 %, n=2,457), I_Infecciosas (68.6 %, n=2,115), IX_Circulatorio (66.1 %, n=3,815), II_Neoplasias (53.4 %, n=2,023) y X_Respiratorio (53.2 %, n=4,715). Los más benignos son VII_Ojo, VIII_Oido y XV_Embarazo, con tasas cercanas al 0.1 %. Esta variable por sí sola estructura prácticamente todo el espacio de riesgo.
 
 **3. INFECCION es la señal binaria individual más fuerte.** Solo 1,213 casos (1.3 % del total) presentaron infección intrahospitalaria, pero su tasa de defunción es 64.5 % frente al 18.5 % sin infección — una separación de 46 puntos porcentuales.
 
