@@ -1,6 +1,6 @@
 ---
 title: "Trabajo Final — Proceso de Machine Learning para egresos hospitalarios SSA 2014"
-author: "Nicolás Barrón Sour"
+author: "Nicolás Barrón Sour - Ximena Flores Martinez - Carlos Vertti - Paloma Guitierrez"
 format:
   html:
     toc: true
@@ -40,7 +40,7 @@ El objetivo de este trabajo es construir y evaluar un modelo de clasificación b
 ## Términos del dominio
 
 | Término | Definición |
-|---------|------------|
+|-------------------------------|-----------------------------------------|
 | **CIE-10** | Clasificación Internacional de Enfermedades, 10.ª revisión (OMS). Codifica diagnósticos en 22 capítulos mediante una letra + hasta 4 dígitos (ej. `I219` = infarto agudo). |
 | **SSA** | Secretaría de Salud. Atiende a población sin seguridad social formal. |
 | **Egreso hospitalario** | Evento de salida del paciente de la unidad médica (Mejoría, Defunción, Traslado, etc.). |
@@ -258,44 +258,386 @@ df_raw |>
   theme_minimal(base_size = 10)
 ```
 
-
 ## Hallazgos
 
-**1. Desbalance de clases moderado, explicado por diagnósticos obstétricos.**
-El dataset contiene 18,010 Defunciones (19.06 %) y 76,483 Mejorías (80.94 %). La tasa base del clasificador trivial es 80.94 %, umbral mínimo que todo modelo debe superar. El origen del desbalance es el Capítulo XV (Embarazo y parto), con 34,137 casos y una tasa de defunción de apenas 0.1 % — el grupo más numeroso con la mortalidad más baja. La métrica de evaluación principal será ROC-AUC y no accuracy.
+**1. Desbalance de clases moderado, explicado por diagnósticos obstétricos.** El dataset contiene 18,010 Defunciones (19.06 %) y 76,483 Mejorías (80.94 %). La tasa base del clasificador trivial es 80.94 %, umbral mínimo que todo modelo debe superar. El origen del desbalance es el Capítulo XV (Embarazo y parto), con 34,137 casos y una tasa de defunción de apenas 0.1 % — el grupo más numeroso con la mortalidad más baja. La métrica de evaluación principal será ROC-AUC y no accuracy.
 
-**2. CIE-10 es el predictor con mayor poder discriminante.**
-Los 3,199 códigos únicos se agrupan en 22 capítulos con tasas de defunción que van del 0.1 % (XV, Embarazo) al 73 % (XVIII, Síntomas y signos anormales). Los cinco capítulos más letales son: XVIII\_SintomasSignos (73 %, n=2,457), I\_Infecciosas (68.6 %, n=2,115), IX\_Circulatorio (66.1 %, n=3,815), II\_Neoplasias (53.4 %, n=2,023) y X\_Respiratorio (53.2 %, n=4,715). Los más benignos son VII\_OjoOido y XV\_Embarazo, ambos con 0.1 %. Esta variable por sí sola estructura prácticamente todo el espacio de riesgo.
+**2. CIE-10 es el predictor con mayor poder discriminante.** Los 3,199 códigos únicos se agrupan en 22 capítulos con tasas de defunción que van del 0.1 % (XV, Embarazo) al 73 % (XVIII, Síntomas y signos anormales). Los cinco capítulos más letales son: XVIII_SintomasSignos (73 %, n=2,457), I_Infecciosas (68.6 %, n=2,115), IX_Circulatorio (66.1 %, n=3,815), II_Neoplasias (53.4 %, n=2,023) y X_Respiratorio (53.2 %, n=4,715). Los más benignos son VII_OjoOido y XV_Embarazo, ambos con 0.1 %. Esta variable por sí sola estructura prácticamente todo el espacio de riesgo.
 
-**3. INFECCION es la señal binaria individual más fuerte.**
-Solo 1,213 casos (1.3 % del total) presentaron infección intrahospitalaria, pero su tasa de defunción es 64.5 % frente al 18.5 % sin infección — una separación de 46 puntos porcentuales.
+**3. INFECCION es la señal binaria individual más fuerte.** Solo 1,213 casos (1.3 % del total) presentaron infección intrahospitalaria, pero su tasa de defunción es 64.5 % frente al 18.5 % sin infección — una separación de 46 puntos porcentuales.
 
-**4. EDAD y DIAS_ESTANCIA son los mejores predictores cuantitativos.**
-Los pacientes fallecidos tienen mediana de 54 años (media 48.7) frente a 25 años (media 29.9) en alta por mejoría. La estancia hospitalaria presenta mediana de 4 días en defunciones versus 1 día en mejorías. Ambas variables tienen valores máximos imposibles que se corregirán en preprocesamiento: EDAD = 130 y DIAS_ESTANCIA = 12,845 días.
+**4. EDAD y DIAS_ESTANCIA son los mejores predictores cuantitativos.** Los pacientes fallecidos tienen mediana de 54 años (media 48.7) frente a 25 años (media 29.9) en alta por mejoría. La estancia hospitalaria presenta mediana de 4 días en defunciones versus 1 día en mejorías. Ambas variables tienen valores máximos imposibles que se corregirán en preprocesamiento: EDAD = 130 y DIAS_ESTANCIA = 12,845 días.
 
-**5. Anomalía sistemática de captura en Sinaloa.**
-De los 4,696 registros del estado, 1,843 (39.2 %) tienen exactamente PESO = 99.0 kg — valor por defecto del sistema de captura hospitalaria. Se imputarán como NA antes de calcular cualquier percentil, ya que de lo contrario distorsionarían el P99 de PESO y la imputación posterior.
+**5. Anomalía sistemática de captura en Sinaloa.** De los 4,696 registros del estado, 1,843 (39.2 %) tienen exactamente PESO = 99.0 kg — valor por defecto del sistema de captura hospitalaria. Se imputarán como NA antes de calcular cualquier percentil, ya que de lo contrario distorsionarían el P99 de PESO y la imputación posterior.
 
-**6. GENERO muestra una diferencia sustancial confundida con la composición diagnóstica.**
-Los hombres tienen una tasa de defunción del 30.8 % (n=31,773) frente al 13.1 % de las mujeres (n=62,713). La diferencia está parcialmente confundida con el Capítulo XV: las mujeres dominan los 34,137 egresos obstétricos de mortalidad mínima. La categoría N.E. (7 registros, 85.7 %) se eliminará por tener menos de 10 observaciones.
+**6. GENERO muestra una diferencia sustancial confundida con la composición diagnóstica.** Los hombres tienen una tasa de defunción del 30.8 % (n=31,773) frente al 13.1 % de las mujeres (n=62,713). La diferencia está parcialmente confundida con el Capítulo XV: las mujeres dominan los 34,137 egresos obstétricos de mortalidad mínima. La categoría N.E. (7 registros, 85.7 %) se eliminará por tener menos de 10 observaciones.
 
-**7. Sesgo de registro sistemático por estado — hallazgo crítico de calidad de datos.**
-Tabasco presenta 99.9 % de defunción (n=719), Coahuila de Zaragoza 98.8 % (n=515) y San Luis Potosí 97.3 % (n=777). Ningún hospital opera con tasas cercanas al 100 %; lo más probable es que estos estados enviaron a la DGIS únicamente los registros de defunción, omitiendo los egresos por mejoría. Esto invalida ESTADO como predictor geográfico directo y justifica su agrupación por región.
+**7. Sesgo de registro sistemático por estado — hallazgo crítico de calidad de datos.** Tabasco presenta 99.9 % de defunción (n=719), Coahuila de Zaragoza 98.8 % (n=515) y San Luis Potosí 97.3 % (n=777). Ningún hospital opera con tasas cercanas al 100 %; lo más probable es que estos estados enviaron a la DGIS únicamente los registros de defunción, omitiendo los egresos por mejoría. Esto invalida ESTADO como predictor geográfico directo y justifica su agrupación por región.
 
-**8. ASEGURADO = GRATUIDAD tiene 100 % de defunción en 105 casos.**
-Al igual que el hallazgo de ESTADO, esto señala un sesgo de registro y no un patrón clínico real. PROSPERA tiene 0 % de defunción en 39 casos, en el extremo opuesto. Ambas categorías, junto con SEDENA (n=11), PEMEX (n=15) y SECMAR (n=5), se consolidarán en grupos más amplios. La categoría principal es SEGURO POPULAR con 56,937 registros y 18.3 % de defunción.
+**8. ASEGURADO = GRATUIDAD tiene 100 % de defunción en 105 casos.** Al igual que el hallazgo de ESTADO, esto señala un sesgo de registro y no un patrón clínico real. PROSPERA tiene 0 % de defunción en 39 casos, en el extremo opuesto. Ambas categorías, junto con SEDENA (n=11), PEMEX (n=15) y SECMAR (n=5), se consolidarán en grupos más amplios. La categoría principal es SEGURO POPULAR con 56,937 registros y 18.3 % de defunción.
 
-**9. INDIGENA muestra diferencias reales con una categoría de imputación compleja.**
-Los pacientes identificados como indígenas tienen 35.5 % de defunción (n=1,137), "No sabe" 30.4 % (n=1,362), y "No" 20.0 % (n=81,762). La categoría "No responde" tiene solo 8.0 % (n=10,232), probablemente pacientes que ingresaron por procedimientos electivos. Esta distribución sugiere que "No responde" no es equivalente a dato faltante y debe conservarse como categoría propia.
+**9. INDIGENA muestra diferencias reales con una categoría de imputación compleja.** Los pacientes identificados como indígenas tienen 35.5 % de defunción (n=1,137), "No sabe" 30.4 % (n=1,362), y "No" 20.0 % (n=81,762). La categoría "No responde" tiene solo 8.0 % (n=10,232), probablemente pacientes que ingresaron por procedimientos electivos. Esta distribución sugiere que "No responde" no es equivalente a dato faltante y debe conservarse como categoría propia.
 
-**10. MES_INGRESO tiene variación estacional moderada pero consistente.**
-La tasa de defunción varía del 17.4 % en septiembre al 21.9 % en enero — un rango de 4.5 puntos porcentuales. Los meses de invierno presentan mayor mortalidad, consistente con el patrón epidemiológico de enfermedades respiratorias e infecciosas. La variable se conservará dado su costo computacional nulo y su potencial de capturar efectos estacionales.
+**10. MES_INGRESO tiene variación estacional moderada pero consistente.** La tasa de defunción varía del 17.4 % en septiembre al 21.9 % en enero — un rango de 4.5 puntos porcentuales. Los meses de invierno presentan mayor mortalidad, consistente con el patrón epidemiológico de enfermedades respiratorias e infecciosas. La variable se conservará dado su costo computacional nulo y su potencial de capturar efectos estacionales.
 
----
+------------------------------------------------------------------------
+
+# Parte 2: Preparar Datos
+
+En esta sección se aplican las transformaciones necesarias para convertir los datos crudos en un conjunto limpio, coherente y listo para el modelado. Las decisiones tomadas se fundamentan en los hallazgos del análisis exploratorio de la Parte 1 y en las recomendaciones del protocolo CRISP-ML. El orden de las operaciones es deliberado: primero se corrigen anomalías conocidas, luego se tratan outliers, después se imputan valores faltantes, se recodifican variables y finalmente se divide el conjunto.
+
+```{r}
+#| message: false
+#| warning: false
+
+# Se parte de df_raw ya cargado en Parte 1 — tiene CIE10_CAP y EGRESO como factor.
+# NO se re-lee el CSV para no perder esas transformaciones.
+df <- df_raw
+```
+
+## Eliminación de registros inválidos
+
+Antes de cualquier transformación, se eliminan los registros que no aportan información válida. El criterio aplicado es conservador: solo se descartan observaciones cuya categoría tiene menos de 10 ocurrencias en una variable (umbral mínimo para que una categoría sea estadísticamente representativa) o cuyo valor es explícitamente no especificado en variables donde esa ambigüedad no puede ser clínica.
+
+**Variable GENERO:** La categoría "N.E." (No Especificado) tiene únicamente 7 registros. Al ser tan pocos, no se puede construir un patrón de comportamiento para esta categoría, y su inclusión introduciría ruido. Se eliminan.
+
+**Variable ESTADO:** Estados con menos de 10 observaciones no permiten estimaciones confiables de tasas de mortalidad ni pueden formar su propia categoría en agrupaciones. Se eliminan sus registros.
+
+```{r}
+# Registros antes de limpieza
+n_inicial <- nrow(df)
+
+# 1. Eliminar GENERO = "N.E."
+df <- df |> filter(GENERO != "N.E.")
+
+# 2. Eliminar estados con menos de 10 ocurrencias
+df <- df |>
+  group_by(ESTADO) |>
+  filter(n() >= 10) |>
+  ungroup()
+
+# Resumen de registros eliminados
+n_final <- nrow(df)
+cat(sprintf(
+  "Registros iniciales:  %s\nRegistros eliminados: %s (%.2f%%)\nRegistros finales:    %s\n",
+  format(n_inicial, big.mark = ","),
+  format(n_inicial - n_final, big.mark = ","),
+  (n_inicial - n_final) / n_inicial * 100,
+  format(n_final, big.mark = ",")
+))
+```
+
+## Corrección de la anomalía de Sinaloa (PESO = 99)
+
+Durante el análisis exploratorio se identificó que el 39.2% de los registros del estado de Sinaloa tienen exactamente `PESO = 99.0`. Este valor corresponde al valor por defecto del sistema de captura hospitalaria, no a un peso real. Si no se corrige antes de calcular percentiles o imputar, este valor artificial inflaría los estadísticos de posición y contaminaría la imputación de todos los demás registros.
+
+Esta corrección se realiza **antes** de cualquier cálculo de percentiles o paso de imputación, ya que ESTADO todavía existe en el dataframe en este punto del pipeline.
+
+```{r}
+# Número de registros afectados
+n_anomalia <- df |>
+  filter(ESTADO == "Sinaloa", PESO == 99) |>
+  nrow()
+
+cat(sprintf("Registros de Sinaloa con PESO = 99 convertidos a NA: %d\n", n_anomalia))
+
+# Reemplazar PESO = 99 en Sinaloa por NA
+df <- df |>
+  mutate(PESO = if_else(ESTADO == "Sinaloa" & PESO == 99, NA_real_, PESO))
+```
+
+## Tratamiento de valores atípicos
+
+### PESO y ALTURA: eliminación por percentil 1 y 99
+
+Para las variables de peso y altura, se eliminan los registros que caen fuera del rango entre el percentil 1 y el percentil 99. Esta estrategia descarta los valores más extremos sin asumir una distribución particular ni perder el grueso de los datos. Los valores faltantes se excluyen del cálculo de percentiles para evitar sesgos.
+
+```{r}
+# Calcular percentiles excluyendo NA (con corrección de Sinaloa ya aplicada)
+p1_peso  <- quantile(df$PESO,   0.01, na.rm = TRUE)
+p99_peso <- quantile(df$PESO,   0.99, na.rm = TRUE)
+p1_alt   <- quantile(df$ALTURA, 0.01, na.rm = TRUE)
+p99_alt  <- quantile(df$ALTURA, 0.99, na.rm = TRUE)
+
+cat(sprintf("PESO   — Rango válido: [%.1f, %.1f] kg\n", p1_peso, p99_peso))
+cat(sprintf("ALTURA — Rango válido: [%.1f, %.1f] cm\n", p1_alt,  p99_alt))
+
+n_antes <- nrow(df)
+
+# Eliminar filas fuera del rango; se conservan los NA (serán imputados después)
+df <- df |>
+  filter(is.na(PESO)   | between(PESO,   p1_peso, p99_peso)) |>
+  filter(is.na(ALTURA) | between(ALTURA, p1_alt,  p99_alt))
+
+cat(sprintf("Registros eliminados por outliers en PESO/ALTURA: %d\n", n_antes - nrow(df)))
+```
+
+### EDAD: cap de valores implausibles
+
+La edad máxima registrada en los datos es de 130 años, lo cual es biológicamente imposible y corresponde a un error de captura. Se establece un límite de 120 años; los valores por encima se convierten en `NA`.
+
+```{r}
+n_edad_invalida <- sum(df$EDAD > 120, na.rm = TRUE)
+cat(sprintf("Registros con EDAD > 120 convertidos a NA: %d\n", n_edad_invalida))
+
+df <- df |>
+  mutate(EDAD = if_else(EDAD > 120, NA_real_, EDAD))
+
+summary(df$EDAD)
+```
+
+### DIAS_ESTANCIA: cap por percentil 99
+
+La estancia máxima registrada es de 12,845 días (más de 35 años), valor claramente erróneo. En lugar de usar un límite clínico arbitrario, se aplica el percentil 99 como umbral, que captura el comportamiento real del 98% de los casos.
+
+```{r}
+p99_dias <- quantile(df$DIAS_ESTANCIA, 0.99, na.rm = TRUE)
+n_estancia_invalida <- sum(df$DIAS_ESTANCIA > p99_dias, na.rm = TRUE)
+
+cat(sprintf("Percentil 99 de DIAS_ESTANCIA: %.0f días\n", p99_dias))
+cat(sprintf("Registros convertidos a NA: %d\n", n_estancia_invalida))
+
+df <- df |>
+  mutate(DIAS_ESTANCIA = if_else(DIAS_ESTANCIA > p99_dias, NA_real_, DIAS_ESTANCIA))
+```
+
+## Imputación de PESO y ALTURA
+
+El 24.6% de los registros de `PESO` y el 25.3% de `ALTURA` son `NA` (después de corregir la anomalía de Sinaloa). Eliminar estos registros reduciría la muestra de entrenamiento de forma significativa y potencialmente introduciría sesgo sistemático si los datos no faltan de forma completamente aleatoria (MCAR).
+
+**Estrategia elegida: imputación por mediana de grupo (CIE10_CAP × GENERO).** La justificación clínica es directa: el peso y la talla de un paciente están fuertemente determinados por su condición médica principal y por su sexo biológico. Un paciente obstétrico (Capítulo XV) tiene un perfil corporal muy diferente al de un paciente con síntomas no clasificados (Capítulo XVIII). Usar la mediana en lugar de la media protege contra outliers residuales. `CIE10_CAP` ya existe en `df` desde la carga inicial en Parte 1.
+
+Se aplica imputación en dos pasos: (1) mediana del grupo (CIE10_CAP × GENERO) como paso principal, y (2) mediana global como respaldo para grupos con muy pocos registros no-NA.
+
+```{r}
+df <- df |>
+  group_by(CIE10_CAP, GENERO) |>
+  mutate(
+    PESO   = if_else(is.na(PESO),   median(PESO,   na.rm = TRUE), PESO),
+    ALTURA = if_else(is.na(ALTURA), median(ALTURA, na.rm = TRUE), ALTURA)
+  ) |>
+  ungroup()
+
+# Paso de respaldo: mediana global para grupos sin suficientes datos
+mediana_global_peso   <- median(df$PESO,   na.rm = TRUE)
+mediana_global_altura <- median(df$ALTURA, na.rm = TRUE)
+
+df <- df |>
+  mutate(
+    PESO   = if_else(is.na(PESO),   mediana_global_peso,   PESO),
+    ALTURA = if_else(is.na(ALTURA), mediana_global_altura, ALTURA)
+  )
+
+cat(sprintf("NA restantes en PESO:   %d\n", sum(is.na(df$PESO))))
+cat(sprintf("NA restantes en ALTURA: %d\n", sum(is.na(df$ALTURA))))
+```
+
+## Recodificación y agrupación de variables categóricas
+
+### ESTADO → REGION
+
+El análisis exploratorio mostró que varios estados (Tabasco, Coahuila, San Luis Potosí) presentan tasas de mortalidad cercanas al 100 %, evidencia de que esos estados enviaron únicamente registros de defunción a la base. Usar `ESTADO` directamente introduciría sesgo de registro en lugar de señal clínica real. Se agrupan en las cuatro regiones geográficas de la SSA, que tienen sentido epidemiológico por sus diferencias en infraestructura hospitalaria y perfil demográfico. La variable `ESTADO` se elimina tras la agrupación.
+
+```{r}
+# Verificar nombres exactos de estados en el CSV antes de mapear
+cat("Estados únicos en el dataset:\n")
+print(sort(unique(df$ESTADO)))
+```
+
+```{r}
+df <- df |>
+  mutate(REGION = case_when(
+    ESTADO %in% c("Baja California", "Baja California Sur", "Chihuahua",
+                  "Coahuila de Zaragoza", "Durango", "Nuevo Leon",
+                  "Sinaloa", "Sonora", "Tamaulipas")                          ~ "REGION_I",
+    ESTADO %in% c("Aguascalientes", "Colima", "Guanajuato", "Jalisco",
+                  "Michoacan de Ocampo", "Nayarit", "Queretaro de Arteaga",
+                  "San Luis Potosi", "Zacatecas")                             ~ "REGION_II",
+    ESTADO %in% c("Distrito Federal", "Mexico", "Guerrero",
+                  "Hidalgo", "Morelos", "Puebla", "Tlaxcala")                 ~ "REGION_III",
+    ESTADO %in% c("Campeche", "Chiapas", "Oaxaca", "Quintana Roo",
+                  "Tabasco", "Veracruz de Ignacio de la Llave", "Yucatan")   ~ "REGION_IV",
+    ESTADO == "No Especificado"                                               ~ "NO_ESPECIFICADO",
+    TRUE ~ "OTRA"
+  )) |>
+  select(-ESTADO)
+
+# Verificar: ningún estado debe caer en OTRA
+df |>
+  count(REGION, sort = TRUE) |>
+  mutate(pct = percent(n / sum(n), 0.1)) |>
+  kable(col.names = c("Región", "n", "%"),
+        caption = "Distribución por región geográfica")
+```
+
+### ASEGURADO → ASEGURADO_GRP
+
+La variable original tiene 12 categorías, varias con muy pocas observaciones (SEDENA n=11, PEMEX n=15, SECMAR n=5, PROSPERA n=39, GRATUIDAD n=105). Categorías tan pequeñas son estadísticamente inestables. Se consolidan en 6 grupos clínicamente coherentes. La categoría "SE IGNORA" se conserva como propia: el desconocimiento del aseguramiento al ingreso suele indicar urgencia o inconsciencia del paciente — información clínica en sí misma, como señala explícitamente el enunciado del proyecto.
+
+```{r}
+# Verificar categorías exactas presentes en el CSV
+cat("Categorías únicas en ASEGURADO:\n")
+print(sort(unique(df$ASEGURADO)))
+```
+
+```{r}
+df <- df |>
+  mutate(ASEGURADO_GRP = case_when(
+    ASEGURADO == "IMSS"                         ~ "IMSS",
+    ASEGURADO == "ISSSTE"                        ~ "ISSSTE",
+    ASEGURADO %in% c("SEGURO POPULAR", "SPSS")  ~ "SEGURO_POPULAR",
+    ASEGURADO %in% c("SIN SEGURO", "NINGUNA",
+                     "NO ASEGURADO")             ~ "SIN_SEGURO",
+    ASEGURADO == "SE IGNORA"                     ~ "SE_IGNORA",
+    TRUE                                         ~ "OTRO"
+  )) |>
+  select(-ASEGURADO)
+
+df |>
+  count(ASEGURADO_GRP, sort = TRUE) |>
+  mutate(pct = percent(n / sum(n), 0.1)) |>
+  kable(col.names = c("Grupo de aseguramiento", "n", "%"),
+        caption = "Distribución de ASEGURADO_GRP")
+```
+
+### ACCIDENTE → binarización
+
+La variable `ACCIDENTE` original contiene 11 categorías describiendo el tipo de accidente. Para el modelo de mortalidad, la distinción relevante es si el ingreso fue consecuencia de un accidente o no, independientemente del tipo. Se binariza a SI / NO. En este dataset, el valor para ausencia de accidente es `"NO APLICA"`.
+
+```{r}
+# Verificar el valor exacto para "sin accidente"
+cat("Categorías únicas en ACCIDENTE:\n")
+print(sort(unique(df$ACCIDENTE)))
+```
+
+```{r}
+df <- df |>
+  mutate(ACCIDENTE = if_else(ACCIDENTE == "NO APLICA", "NO", "SI"))
+
+df |>
+  count(ACCIDENTE) |>
+  mutate(pct = percent(n / sum(n), 0.1)) |>
+  kable(col.names = c("Accidente", "n", "%"),
+        caption = "Distribución de ACCIDENTE (binarizada)")
+```
+
+### INDIGENA — justificación de conservar todas las categorías
+
+La variable `INDIGENA` tiene cuatro categorías. Como se documentó en la Parte 1, "No responde" tiene una tasa de mortalidad del 8 % — considerablemente más baja que el promedio general del 19 %. Esta categoría captura admisiones electivas o programadas donde el paciente decidió no contestar, un perfil clínico distinto. Imputarla como cualquiera de las otras categorías borraría esta señal. Se conservan los cuatro niveles como están.
+
+```{r}
+df |>
+  group_by(INDIGENA) |>
+  summarise(
+    n              = n(),
+    tasa_defuncion = percent(mean(EGRESO == "Defuncion"), 0.1)
+  ) |>
+  mutate(pct_total = percent(n / sum(n), 0.1)) |>
+  arrange(desc(n)) |>
+  kable(col.names = c("Categoría INDIGENA", "n", "Tasa defunción", "% total"),
+        caption = "Tasas de defunción por categoría de INDIGENA")
+```
+
+## Codificación final de variables
+
+Con todas las transformaciones aplicadas, se codifican las variables al tipo correcto para que `caret` las interprete adecuadamente. `EGRESO` mantiene "Defuncion" como primer nivel (clase positiva). La columna `CIE10` original se elimina — ya está representada por `CIE10_CAP`.
+
+Los NA restantes en `EDAD` (n=1) y `DIAS_ESTANCIA` (n=875) corresponden a los valores extremos convertidos en la sección anterior. Se imputarán por mediana dentro de cada pliegue de validación cruzada mediante `preProcess = "medianImpute"` en `caret::train()`, evitando así data leakage.
+
+```{r}
+df <- df |>
+  mutate(
+    # Variable objetivo: Defuncion = clase positiva (primer nivel)
+    EGRESO        = factor(EGRESO, levels = c("Defuncion", "Mejoria")),
+    # Nominales
+    GENERO        = as.factor(GENERO),
+    INFECCION     = as.factor(INFECCION),
+    ACCIDENTE     = as.factor(ACCIDENTE),
+    INDIGENA      = as.factor(INDIGENA),
+    CIE10_CAP     = as.factor(CIE10_CAP),
+    REGION        = as.factor(REGION),
+    ASEGURADO_GRP = as.factor(ASEGURADO_GRP),
+    # Ordinal
+    MES_INGRESO   = factor(MES_INGRESO, levels = c("Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"), ordered = TRUE)
+  ) |>
+  select(-CIE10)   # reemplazado por CIE10_CAP
+
+# Verificar NAs restantes
+na_restantes <- colSums(is.na(df))
+na_restantes <- na_restantes[na_restantes > 0]
+
+if (length(na_restantes) == 0) {
+  cat("✓ No quedan valores NA en el conjunto preparado.\n")
+} else {
+  cat("NAs restantes (se imputarán por mediana dentro de cada pliegue de CV via preProcess):\n")
+  print(na_restantes)
+}
+
+cat(sprintf("\nDimensiones finales: %d filas × %d columnas\n", nrow(df), ncol(df)))
+glimpse(df)
+```
+
+## División CE / CV / CP
+
+Se divide el conjunto en tres partes usando la semilla **2711** y muestreo **estratificado** sobre `EGRESO`. El muestreo estratificado garantiza que la proporción 19% / 81% se preserve en los tres conjuntos, evitando que el desbalance de clases se amplifique por efecto del muestreo.
+
+-   **CE — Entrenamiento (60%):** ajuste de modelos e hiperparámetros mediante validación cruzada interna.
+-   **CV — Validación (20%):** comparación entre modelos durante el desarrollo.
+-   **CP — Prueba (20%):** reservado exclusivamente para la evaluación final de la Parte 4. No se toca durante el desarrollo.
+
+```{r}
+set.seed(2711)
+
+# 60% entrenamiento
+idx_train <- createDataPartition(df$EGRESO, p = 0.60, list = FALSE)
+df_train  <- df[ idx_train, ]
+df_temp   <- df[-idx_train, ]
+
+# Del 40% restante: 50% validación, 50% prueba → 20% / 20% del total
+idx_val  <- createDataPartition(df_temp$EGRESO, p = 0.50, list = FALSE)
+df_val   <- df_temp[ idx_val, ]
+df_test  <- df_temp[-idx_val, ]
+
+tibble(
+  Conjunto      = c("Entrenamiento (CE)", "Validación (CV)", "Prueba (CP)"),
+  n             = c(nrow(df_train), nrow(df_val), nrow(df_test)),
+  `% del total` = percent(c(nrow(df_train), nrow(df_val), nrow(df_test)) / nrow(df), 0.1),
+  `% Defunción` = percent(c(
+    mean(df_train$EGRESO == "Defuncion"),
+    mean(df_val$EGRESO   == "Defuncion"),
+    mean(df_test$EGRESO  == "Defuncion")
+  ), 0.1)
+) |> kable(caption = "División estratificada del conjunto de datos (semilla 2711)")
+```
+
+## Estrategia para el desbalance de clases
+
+Con \~19% de Defunciones en el CE, la mayoría de algoritmos tenderían a clasificar todo como Mejoría para maximizar la exactitud, ignorando la clase de interés clínico. Se aplica **sobremuestreo aleatorio (upsampling) dentro de los pliegues de validación cruzada** mediante `sampling = "up"` en `trainControl`. Al aplicarlo dentro de cada pliegue, el sobremuestreo nunca contamina los datos de validación de ese pliegue, evitando data leakage — problema que ocurriría si se aplicara SMOTE sobre el conjunto completo antes de la CV.
+
+La métrica principal de comparación entre modelos es **ROC-AUC**. Se reportarán también sensibilidad y especificidad al umbral de Youden en la evaluación final (Parte 4). El objeto `ctrl_cv` definido aquí se reutiliza sin modificación en todos los modelos de la Parte 3, garantizando una comparación justa.
+
+```{r}
+ctrl_cv <- trainControl(
+  method            = "cv",
+  number            = 5,
+  classProbs        = TRUE,
+  summaryFunction   = twoClassSummary,
+  sampling          = "up",
+  savePredictions   = "final"
+)
+
+cat("ctrl_cv configurado:\n")
+cat("  - Validación cruzada: 5 pliegues\n")
+cat("  - Upsampling dentro de cada pliegue\n")
+cat("  - Métrica principal: ROC-AUC\n")
+cat("  - Se reutilizará en los 6 modelos de la Parte 3\n")
+```
+
+------------------------------------------------------------------------
 
 # Referencias
 
-- Organización Mundial de la Salud. (2016). *Clasificación Internacional de Enfermedades, 10.ª revisión (CIE-10).* https://icd.who.int/browse10/2019/en
-- Secretaría de Salud. (2014). *Registro de Egresos Hospitalarios*. DGIS. https://www.gob.mx/salud
-- Kuhn, M. (2024). *The caret Package*. https://topepo.github.io/caret/
-- Anthropic. (2026). Claude (claude-sonnet-4-6) [Modelo de lenguaje grande]. https://claude.ai
+-   Organización Mundial de la Salud. (2016). *Clasificación Internacional de Enfermedades, 10.ª revisión (CIE-10).* https://icd.who.int/browse10/2019/en
+-   Secretaría de Salud. (2014). *Registro de Egresos Hospitalarios*. DGIS. https://www.gob.mx/salud
+-   Kuhn, M. (2024). *The caret Package*. https://topepo.github.io/caret/
+-   Anthropic. (2026). Claude (claude-sonnet-4-6) \[Modelo de lenguaje grande\]. https://claude.ai
