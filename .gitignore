@@ -16,3 +16,6 @@ Thumbs.db
 
 *.html
 
+reporte_cache/
+reporte_files/
+reporte.html

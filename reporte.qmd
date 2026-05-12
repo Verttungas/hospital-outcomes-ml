@@ -1,6 +1,6 @@
 ---
 title: "Trabajo Final — Proceso de Machine Learning para egresos hospitalarios SSA 2014"
-author: "Nicolás Barrón Sour - Ximena Flores Martinez - Carlos Vertti - Paloma Guitierrez"
+author: "Nicolás Barrón Sour - Ximena Flores Martinez - Carlos Vertti - Paloma Gutiérrez"
 format:
   html:
     toc: true
@@ -12,7 +12,7 @@ format:
     code-tools: true
 embed-resources: true
 editor: source
-date: 2026-05-09
+date: 2026-05-12
 ---
 
 ## Librerías
@@ -636,7 +636,384 @@ cat("  - Se reutilizará en los 6 modelos de la Parte 3\n")
 
 ------------------------------------------------------------------------
 
-# Referencias
+# Parte 3: Construir y afinar los modelos
+
+## Estrategia de comparación justa entre algoritmos
+
+Para que la comparación entre los seis algoritmos sea válida, todos comparten exactamente las mismas condiciones:
+
+-   **Mismos conjuntos:** todos los modelos se entrenan sobre `df_train` (60% de los datos, \~55,500 registros) y se afinan usando el `ctrl_cv` definido al final de la Parte 2.
+-   **Mismo resampling:** validación cruzada de 5 pliegues (`method = "cv", number = 5`) con upsampling dentro de cada pliegue para compensar el desbalance 19%/81%.
+-   **Misma métrica de selección:** ROC-AUC. Se elige sobre Accuracy porque con clases desbalanceadas la exactitud es engañosa — un clasificador que predice siempre Mejoría alcanza 80.9% de accuracy sin aprender nada.
+-   **Mismo caso positivo:** Defunción.
+-   **Escalado:** se decide por modelo. kNN, Regresión Logística, SVM y Red Neuronal requieren escalado porque son sensibles a la magnitud de las variables. Árboles y Naive Bayes no lo requieren.
+-   **NAs residuales:** los 876 NA en `EDAD` y `DIAS_ESTANCIA` se imputan por mediana dentro de cada pliegue usando `preProcess = "medianImpute"`, evitando data leakage.
+
+El conjunto `df_val` se usará para comparar modelos entre sí durante el desarrollo. El conjunto `df_test` queda reservado exclusivamente para la Parte 4.
+
+```{r}
+#| message: false
+#| warning: false
+
+library(caret)
+library(lattice)
+library(e1071)      # SVM y Naive Bayes
+library(klaR)       # Naive Bayes con caret
+library(rpart)      # Árboles
+library(rpart.plot) # Visualización de árboles
+library(nnet)       # Red neuronal
+library(NeuralNetTools) # Visualización de red neuronal
+
+# Objeto de control compartido por todos los modelos (definido en Parte 2)
+# ctrl_cv ya existe en el entorno — se muestra aquí solo para referencia
+ctrl_cv
+
+# Los NAs residuales en EDAD y DIAS_ESTANCIA (<1% de los datos)
+# se imputan dentro de cada pliegue vía preProcess = "medianImpute"
+
+# Naive Bayes no maneja factores ordenados, se convierte MES_INGRESO a factor nominal sin perder la información
+df_train$MES_INGRESO <- factor(df_train$MES_INGRESO, ordered = FALSE)
+df_val$MES_INGRESO   <- factor(df_val$MES_INGRESO,   ordered = FALSE)
+df_test$MES_INGRESO  <- factor(df_test$MES_INGRESO,  ordered = FALSE)
+
+cat(sprintf("df_train: %d filas\n", nrow(df_train)))
+cat(sprintf("df_val:   %d filas\n", nrow(df_val)))
+cat(sprintf("df_test:  %d filas\n", nrow(df_test)))
+
+```
+
+## Modelo 1: k-Nearest Neighbors (kNN)
+
+El escalado es obligatorio. kNN calcula distancias euclidianas entre observaciones, por lo que una variable en centímetros dominaría completamente a una variable en unidades pequeñas si no se estandarizan. Se aplica `preProcess = c("medianImpute", "center", "scale")`.
+
+**Hiperparámetros:** `k` (número de vecinos). Se prueban valores impares del 3 al 15 para evitar empates en un problema binario.
+
+```{r knn-modelo}
+#| message: false
+#| warning: false
+#| cache: true
+
+parametros_knn <- expand.grid(k = seq(3, 15, 2))
+
+modelo_knn <- train(
+  EGRESO ~ .,
+  data       = df_train,
+  method     = "knn",
+  preProcess = c("medianImpute", "center", "scale"),
+  tuneGrid   = parametros_knn,
+  trControl  = ctrl_cv,
+  metric     = "ROC"
+)
+
+modelo_knn
+```
+
+```{r knn-plot}
+plot(modelo_knn, main = "kNN — ROC-AUC por valor de k")
+```
+
+```{r knn-val}
+# Evaluación sobre df_val
+pred_knn     <- predict(modelo_knn, newdata = df_val)
+pred_knn_prob <- predict(modelo_knn, newdata = df_val, type = "prob")
+
+cm_knn <- confusionMatrix(data      = pred_knn,
+                          reference = df_val$EGRESO,
+                          positive  = "Defuncion",
+                          mode      = "everything")
+cm_knn
+```
+
+## Modelo 2: Naive Bayes
+
+El escalado no se aplica. Naive Bayes calcula probabilidades condicionales por cada variable de forma independiente, por lo que la magnitud de los valores numéricos no afecta el resultado. Escalar no aporta nada y quita interpretabilidad.
+
+**Hiperparámetros:** `usekernel` — controla si las variables numéricas se modelan con una distribución gaussiana (`FALSE`) o con estimación de densidad por kernel (`TRUE`). Se prueban ambos valores. El parámetro `fL` es la corrección de Laplace; se prueba con 0 y con 1. También se prueba `adjust` para regular el ancho del kernel: `0.5` produce una densidad más sensible (menos suavizada) y `1.0` corresponde al suavizado base.
+
+```{r nb-modelo}
+#| message: false
+#| warning: false
+
+library(klaR)
+
+set.seed(2711)
+
+parametros_nb <- expand.grid(
+  fL        = c(0, 1),
+  usekernel = c(TRUE, FALSE),
+  adjust    = c(0.5, 1.0)
+)
+
+modelo_nb <- train(
+  EGRESO ~ .,
+  data       = df_train,
+  method     = "nb",
+  tuneGrid   = parametros_nb,
+  preProcess = c("medianImpute"),
+  trControl  = ctrl_cv,
+  metric     = "ROC"
+)
+```
+
+```{r nb-val}
+# Predicción sobre df_val (en caret::train(method = "nb"), predict() devuelve factor de clases)
+pred_nb <- predict(modelo_nb, newdata = df_val)
+
+# Matriz de confusión con caret
+cm_nb <- confusionMatrix(data      = pred_nb,
+                         reference = df_val$EGRESO,
+                         positive  = "Defuncion",
+                         mode      = "everything")
+cm_nb
+```
+
+## Modelo 3: Árbol de decisión (rpart)
+
+El escalado no se aplica. Los árboles de decisión toman decisiones basadas en umbrales de corte por variable, por lo que la magnitud de los valores no afecta la estructura del árbol ni sus reglas. Escalar solo quitaría interpretabilidad.
+
+**Hiperparámetros:** `cp` (parámetro de complejidad). Controla qué tan grande crece el árbol — valores pequeños permiten árboles más complejos, valores grandes los podan más agresivamente. Se prueban valores entre 0.0001 y 0.01.
+
+```{r arbol-modelo}
+#| message: false
+#| warning: false
+#| cache: true
+
+library(rpart)
+library(rpart.plot)
+
+set.seed(2711)
+
+parametros_arbol <- expand.grid(cp = c(0.0001, 0.0005, 0.001, 0.005, 0.01))
+
+modelo_arbol <- train(
+  EGRESO ~ .,
+  data      = df_train,
+  method    = "rpart",
+  preProcess = c("medianImpute"),
+  tuneGrid  = parametros_arbol,
+  trControl = ctrl_cv,
+  metric    = "ROC"
+)
+
+modelo_arbol
+plot(modelo_arbol, main = "Árbol — ROC-AUC por cp")
+```
+
+```{r arbol-plot}
+# Visualizar el árbol con el cp óptimo
+rpart.plot(modelo_arbol$finalModel,
+           type  = 4,
+           extra = 104,
+           main  = "Árbol de clasificación — EGRESO")
+```
+
+```{r arbol-val}
+pred_arbol <- predict(modelo_arbol, newdata = df_val)
+
+cm_arbol <- confusionMatrix(data      = pred_arbol,
+                            reference = df_val$EGRESO,
+                            positive  = "Defuncion",
+                            mode      = "everything")
+cm_arbol
+```
+
+## Modelo 4: Regresión Logística
+
+El escalado sí se aplica. Aunque la regresión logística puede funcionar sin escalar, estandarizar ayuda a la convergencia del algoritmo y hace los coeficientes comparables entre variables con distintas magnitudes.
+
+**Hiperparámetros:** la regresión logística clásica no tiene hiperparámetros que afinar — el modelo tiene un único ajuste posible. Se usa `method = "glm"` con `family = "binomial"` dentro de caret, aplicando la misma validación cruzada de 5 pliegues para obtener una estimación justa del ROC-AUC comparable con los demás modelos.
+
+```{r rl-modelo}
+#| message: false
+#| warning: false
+#| cache: true
+
+set.seed(2711)
+
+modelo_rl <- train(
+  EGRESO ~ .,
+  data       = df_train,
+  method     = "glm",
+  family     = "binomial",
+  preProcess = c("medianImpute", "center", "scale"),
+  trControl  = ctrl_cv,
+  metric     = "ROC"
+)
+
+summary(modelo_rl$finalModel)
+```
+
+```{r rl-val}
+#| message: false
+#| warning: false
+pred_rl <- predict(modelo_rl, newdata = df_val)
+
+cm_rl <- confusionMatrix(data      = pred_rl,
+                         reference = df_val$EGRESO,
+                         positive  = "Defuncion",
+                         mode      = "everything")
+cm_rl
+```
+
+## Modelo 5: Máquinas de Vector Soporte (SVM)
+
+El escalado sí es obligatorio porque SVM construye hiperplanos de separación basándose en distancias entre puntos — si las variables tienen magnitudes muy distintas, las de mayor escala dominarían el cálculo. En este reporte se aplica desde `caret::train()` con `preProcess = c("medianImpute", "center", "scale")`.
+
+**Hiperparámetros:** el kernel radial (RBF) es el más versátil según lo visto en clase. Sus dos parámetros son `C` (penalización por clasificaciones incorrectas) y `sigma` (amplitud del kernel radial). Se prueban valores típicos de ambos.
+
+```{r svm-modelo}
+#| message: false
+#| warning: false
+#| cache: true
+
+library(e1071)
+
+parametros_svm <- expand.grid(
+  C     = c(0.1, 1, 10),
+  sigma = c(0.01, 0.1)
+)
+
+modelo_svm <- train(
+  EGRESO ~ .,
+  data       = df_train,
+  method     = "svmRadial",
+  preProcess = c("medianImpute", "center", "scale"),
+  tuneGrid   = parametros_svm,
+  trControl  = ctrl_cv,
+  metric     = "ROC"
+)
+
+modelo_svm
+plot(modelo_svm, main = "SVM — ROC-AUC por C y sigma")
+```
+
+```{r svm-val}
+pred_svm <- predict(modelo_svm, newdata = df_val)
+
+cm_svm <- confusionMatrix(data      = pred_svm,
+                          reference = df_val$EGRESO,
+                          positive  = "Defuncion",
+                          mode      = "everything")
+cm_svm
+```
+
+## Modelo 6: Red Neuronal (nnet)
+
+El escalado sí es obligatorio. Las redes neuronales usan gradiente descendente para ajustar los pesos — si las variables tienen escalas muy distintas, el gradiente se desestabiliza y la red tarda mucho más en converger o no converge. Se normaliza a rango \[0,1\] con `preProcess = c("range")`, como se recomienda en clase para `nnet`.
+
+**Hiperparámetros:** `size` (número de neuronas en la capa oculta) y `decay` (regularización de pesos para evitar sobreajuste). Se prueban combinaciones típicas vistas en clase.
+
+```{r nnet-modelo}
+#| message: false
+#| warning: false
+#| cache: true
+
+library(nnet)
+
+parametros_nnet <- expand.grid(
+  size  = c(5, 10, 15),
+  decay = c(0.001, 0.01, 0.1)
+)
+
+modelo_nnet <- train(
+  EGRESO ~ .,
+  data       = df_train,
+  method     = "nnet",
+  preProcess = c("medianImpute", "range"),
+  tuneGrid   = parametros_nnet,
+  trControl  = ctrl_cv,
+  metric     = "ROC",
+  MaxNWts    = 2000,
+  maxit      = 200,
+  trace      = FALSE
+)
+
+modelo_nnet
+plot(modelo_nnet, main = "Red Neuronal — ROC-AUC por size y decay")
+```
+
+```{r nnet-val}
+#| message: false
+#| warning: false
+
+pred_nnet <- predict(modelo_nnet, newdata = df_val)
+
+cm_nnet <- confusionMatrix(data      = pred_nnet,
+                           reference = df_val$EGRESO,
+                           positive  = "Defuncion",
+                           mode      = "everything")
+cm_nnet
+```
+
+## Comparación de los seis modelos
+
+```{r comparacion}
+mejor_roc_cv <- function(modelo) {
+  if (!is.null(modelo$results) && "ROC" %in% colnames(modelo$results)) {
+    return(max(modelo$results$ROC, na.rm = TRUE))
+  }
+  NA_real_
+}
+
+etiqueta_modelo <- function(nombre, modelo) {
+  if (is.null(modelo$bestTune) || ncol(modelo$bestTune) == 0) return(nombre)
+  params <- paste(names(modelo$bestTune), unlist(modelo$bestTune), sep = "=", collapse = ", ")
+  sprintf("%s (%s)", nombre, params)
+}
+
+resumen_modelos <- data.frame(
+  Modelo = c(
+    etiqueta_modelo("kNN", modelo_knn),
+    etiqueta_modelo("Naive Bayes", modelo_nb),
+    etiqueta_modelo("Árbol", modelo_arbol),
+    etiqueta_modelo("Reg. Logística", modelo_rl),
+    etiqueta_modelo("SVM", modelo_svm),
+    etiqueta_modelo("Red Neuronal", modelo_nnet)
+  ),
+  ROC_CV = c(
+    mejor_roc_cv(modelo_knn),
+    mejor_roc_cv(modelo_nb),
+    mejor_roc_cv(modelo_arbol),
+    mejor_roc_cv(modelo_rl),
+    mejor_roc_cv(modelo_svm),
+    mejor_roc_cv(modelo_nnet)
+  ),
+  Sensibilidad = c(
+    unname(cm_knn$byClass["Sensitivity"]),
+    unname(cm_nb$byClass["Sensitivity"]),
+    unname(cm_arbol$byClass["Sensitivity"]),
+    unname(cm_rl$byClass["Sensitivity"]),
+    unname(cm_svm$byClass["Sensitivity"]),
+    unname(cm_nnet$byClass["Sensitivity"])
+  ),
+  Especificidad = c(
+    unname(cm_knn$byClass["Specificity"]),
+    unname(cm_nb$byClass["Specificity"]),
+    unname(cm_arbol$byClass["Specificity"]),
+    unname(cm_rl$byClass["Specificity"]),
+    unname(cm_svm$byClass["Specificity"]),
+    unname(cm_nnet$byClass["Specificity"])
+  ),
+  Bal_Accuracy = c(
+    unname(cm_knn$byClass["Balanced Accuracy"]),
+    unname(cm_nb$byClass["Balanced Accuracy"]),
+    unname(cm_arbol$byClass["Balanced Accuracy"]),
+    unname(cm_rl$byClass["Balanced Accuracy"]),
+    unname(cm_svm$byClass["Balanced Accuracy"]),
+    unname(cm_nnet$byClass["Balanced Accuracy"])
+  )
+)
+
+kable(resumen_modelos,
+      digits = 4,
+      caption = "Comparación de los seis modelos en df_val")
+```
+
+Los modelos candidatos son **SVM** (mejor ROC-AUC en CV: 0.9351) y **Árbol de decisión** (mejor sensibilidad: 0.8987 — detecta más defunciones reales). Dado que el objetivo clínico es identificar correctamente los casos de Defunción, se priorizan ambos para evaluación final.
+
+------------------------------------------------------------------------
+
+Referencias
 
 -   Organización Mundial de la Salud. (2016). *Clasificación Internacional de Enfermedades, 10.ª revisión (CIE-10).* https://icd.who.int/browse10/2019/en
 -   Secretaría de Salud. (2014). *Registro de Egresos Hospitalarios*. DGIS. https://www.gob.mx/salud
