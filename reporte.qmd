@@ -669,10 +669,7 @@ library(NeuralNetTools) # Visualización de red neuronal
 ctrl_cv
 
 # Los NAs residuales en EDAD y DIAS_ESTANCIA (<1% de los datos)
-# se eliminan con na.omit(), estrategia vista en clase (TEMA2)
-df_train <- na.omit(df_train)
-df_val   <- na.omit(df_val)
-df_test  <- na.omit(df_test)
+# se imputan dentro de cada pliegue vía preProcess = "medianImpute"
 
 # Naive Bayes no maneja factores ordenados, se convierte MES_INGRESO a factor nominal sin perder la información
 df_train$MES_INGRESO <- factor(df_train$MES_INGRESO, ordered = FALSE)
@@ -689,29 +686,20 @@ cat(sprintf("df_test:  %d filas\n", nrow(df_test)))
 
 El escalado es obligatorio. kNN calcula distancias euclidianas entre observaciones, por lo que una variable en centímetros dominaría completamente a una variable en unidades pequeñas si no se estandarizan. Se aplica `preProcess = c("medianImpute", "center", "scale")`.
 
-**Hiperparámetros:** `k` (número de vecinos). Se prueban valores impares del 3 al 21 para evitar empates en un problema binario.
+**Hiperparámetros:** `k` (número de vecinos). Se prueban valores impares del 3 al 15 para evitar empates en un problema binario.
 
 ```{r knn-modelo}
 #| message: false
 #| warning: false
 #| cache: true
 
-# kNN es computacionalmente costoso con conjuntos grandes (TEMA2).
-# Se trabaja con una muestra estratificada del 20% del CE, conservando la proporción de clases.
-set.seed(2711)
-idx_muestra <- createDataPartition(df_train$EGRESO, p = 0.20, list = FALSE)
-df_train_knn <- df_train[idx_muestra, ]
-
-cat(sprintf("Muestra para kNN: %d registros\n", nrow(df_train_knn)))
-table(df_train_knn$EGRESO)
-
 parametros_knn <- expand.grid(k = seq(3, 15, 2))
 
 modelo_knn <- train(
   EGRESO ~ .,
-  data       = df_train_knn,
+  data       = df_train,
   method     = "knn",
-  preProcess = c("center", "scale"),
+  preProcess = c("medianImpute", "center", "scale"),
   tuneGrid   = parametros_knn,
   trControl  = ctrl_cv,
   metric     = "ROC"
@@ -740,7 +728,7 @@ cm_knn
 
 El escalado no se aplica. Naive Bayes calcula probabilidades condicionales por cada variable de forma independiente, por lo que la magnitud de los valores numéricos no afecta el resultado. Escalar no aporta nada y quita interpretabilidad.
 
-**Hiperparámetros:** `usekernel` — controla si las variables numéricas se modelan con una distribución gaussiana (`FALSE`) o con estimación de densidad por kernel (`TRUE`). Se prueban ambos valores. El segundo parámetro `fL` es la corrección de Laplace; se prueba con 0 y con 1 para evitar probabilidades de cero en categorías poco frecuentes, como se vio en clase.
+**Hiperparámetros:** `usekernel` — controla si las variables numéricas se modelan con una distribución gaussiana (`FALSE`) o con estimación de densidad por kernel (`TRUE`). Se prueban ambos valores. El parámetro `fL` es la corrección de Laplace; se prueba con 0 y con 1. También se prueba `adjust` para regular el ancho del kernel.
 
 ```{r nb-modelo}
 #| message: false
@@ -750,13 +738,21 @@ library(klaR)
 
 set.seed(2711)
 
-# NaiveBayes directo como se vio en clase (TEMA2)
-# usekernel = TRUE: variables numéricas con estimación por kernel
-# fL = 1: corrección de Laplace para evitar probabilidades cero
-modelo_nb <- NaiveBayes(EGRESO ~ .,
-                        data      = df_train,
-                        usekernel = TRUE,
-                        fL        = 1)
+parametros_nb <- expand.grid(
+  fL        = c(0, 1),
+  usekernel = c(TRUE, FALSE),
+  adjust    = c(0.5, 1.0)
+)
+
+modelo_nb <- train(
+  EGRESO ~ .,
+  data       = df_train,
+  method     = "nb",
+  tuneGrid   = parametros_nb,
+  preProcess = c("medianImpute"),
+  trControl  = ctrl_cv,
+  metric     = "ROC"
+)
 ```
 
 ```{r nb-val}
@@ -764,7 +760,7 @@ modelo_nb <- NaiveBayes(EGRESO ~ .,
 pred_nb <- predict(modelo_nb, newdata = df_val)
 
 # Matriz de confusión con caret
-cm_nb <- confusionMatrix(data      = pred_nb$class,
+cm_nb <- confusionMatrix(data      = pred_nb,
                          reference = df_val$EGRESO,
                          positive  = "Defuncion",
                          mode      = "everything")
@@ -793,6 +789,7 @@ modelo_arbol <- train(
   EGRESO ~ .,
   data      = df_train,
   method    = "rpart",
+  preProcess = c("medianImpute"),
   tuneGrid  = parametros_arbol,
   trControl = ctrl_cv,
   metric    = "ROC"
@@ -822,7 +819,7 @@ cm_arbol
 
 ## Modelo 4: Regresión Logística
 
-EL escalado sí se aplica. Aunque la regresión logística puede funcionar sin escalar, estandarizar ayuda a la convergencia del algoritmo y hace los coeficientes comparables entre variables con distintas magnitudes.
+El escalado sí se aplica. Aunque la regresión logística puede funcionar sin escalar, estandarizar ayuda a la convergencia del algoritmo y hace los coeficientes comparables entre variables con distintas magnitudes.
 
 **Hiperparámetros:** la regresión logística clásica no tiene hiperparámetros que afinar — el modelo tiene un único ajuste posible. Se usa `method = "glm"` con `family = "binomial"` dentro de caret, aplicando la misma validación cruzada de 5 pliegues para obtener una estimación justa del ROC-AUC comparable con los demás modelos.
 
@@ -838,7 +835,7 @@ modelo_rl <- train(
   data       = df_train,
   method     = "glm",
   family     = "binomial",
-  preProcess = c("center", "scale"),
+  preProcess = c("medianImpute", "center", "scale"),
   trControl  = ctrl_cv,
   metric     = "ROC"
 )
@@ -860,9 +857,9 @@ cm_rl
 
 ## Modelo 5: Máquinas de Vector Soporte (SVM)
 
-El escalado sí es obligatorio porque SVM construye hiperplanos de separación basándose en distancias entre puntos — si las variables tienen magnitudes muy distintas, las de mayor escala dominarían el cálculo. Se activa `scale = TRUE` directamente en la función `svm()`.
+El escalado sí es obligatorio porque SVM construye hiperplanos de separación basándose en distancias entre puntos — si las variables tienen magnitudes muy distintas, las de mayor escala dominarían el cálculo. En este reporte se aplica desde `caret::train()` con `preProcess = c("medianImpute", "center", "scale")`.
 
-**Hiperparámetros:** el kernel radial (RBF) es el más versátil según lo visto en clase. Sus dos parámetros son `cost` (C — penalización por clasificaciones incorrectas) y `gamma` (amplitud del kernel). Se prueban valores típicos de ambos.
+**Hiperparámetros:** el kernel radial (RBF) es el más versátil según lo visto en clase. Sus dos parámetros son `C` (penalización por clasificaciones incorrectas) y `sigma` (amplitud del kernel radial). Se prueban valores típicos de ambos.
 
 ```{r svm-modelo}
 #| message: false
@@ -871,15 +868,6 @@ El escalado sí es obligatorio porque SVM construye hiperplanos de separación b
 
 library(e1071)
 
-# SVM es costoso computacionalmente con conjuntos grandes.
-# Por lo que se decidió trabajar con una muestra estratificada del 20% del CE, igual que kNN, conservando la proporción de clases.
-set.seed(2711)
-idx_muestra_svm <- createDataPartition(df_train$EGRESO, p = 0.20, list = FALSE)
-df_train_svm    <- df_train[idx_muestra_svm, ]
-
-cat(sprintf("Muestra para SVM: %d registros\n", nrow(df_train_svm)))
-table(df_train_svm$EGRESO)
-
 parametros_svm <- expand.grid(
   C     = c(0.1, 1, 10),
   sigma = c(0.01, 0.1)
@@ -887,9 +875,9 @@ parametros_svm <- expand.grid(
 
 modelo_svm <- train(
   EGRESO ~ .,
-  data       = df_train_svm,
+  data       = df_train,
   method     = "svmRadial",
-  preProcess = c("center", "scale"),
+  preProcess = c("medianImpute", "center", "scale"),
   tuneGrid   = parametros_svm,
   trControl  = ctrl_cv,
   metric     = "ROC"
@@ -922,13 +910,6 @@ El escalado sí es obligatorio. Las redes neuronales usan gradiente descendente 
 
 library(nnet)
 
-# Muestra estratificada del 20% por costo computacional
-set.seed(2711)
-idx_muestra_nnet <- createDataPartition(df_train$EGRESO, p = 0.20, list = FALSE)
-df_train_nnet    <- df_train[idx_muestra_nnet, ]
-
-cat(sprintf("Muestra para Red Neuronal: %d registros\n", nrow(df_train_nnet)))
-
 parametros_nnet <- expand.grid(
   size  = c(5, 10, 15),
   decay = c(0.001, 0.01, 0.1)
@@ -936,9 +917,9 @@ parametros_nnet <- expand.grid(
 
 modelo_nnet <- train(
   EGRESO ~ .,
-  data       = df_train_nnet,
+  data       = df_train,
   method     = "nnet",
-  preProcess = c("range"),
+  preProcess = c("medianImpute", "range"),
   tuneGrid   = parametros_nnet,
   trControl  = ctrl_cv,
   metric     = "ROC",
@@ -967,13 +948,60 @@ cm_nnet
 ## Comparación de los seis modelos
 
 ```{r comparacion}
+mejor_roc_cv <- function(modelo) {
+  if (!is.null(modelo$results) && "ROC" %in% colnames(modelo$results)) {
+    return(max(modelo$results$ROC, na.rm = TRUE))
+  }
+  NA_real_
+}
+
+etiqueta_modelo <- function(nombre, modelo) {
+  if (is.null(modelo$bestTune) || ncol(modelo$bestTune) == 0) return(nombre)
+  params <- paste(names(modelo$bestTune), unlist(modelo$bestTune), sep = "=", collapse = ", ")
+  sprintf("%s (%s)", nombre, params)
+}
+
 resumen_modelos <- data.frame(
-  Modelo = c("kNN (k=15)", "Naive Bayes", "Árbol (cp=0.0005)",
-             "Reg. Logística", "SVM (C=1, σ=0.01)", "Red Neuronal (size=5, decay=0.1)"),
-  ROC_CV = c(0.8885, NA, 0.9228, NA, 0.9351, 0.9319),
-  Sensibilidad = c(0.8120, 0.6038, 0.8987, 0.8615, 0.8537, 0.8618),
-  Especificidad = c(0.8106, 0.9283, 0.8303, 0.8392, 0.8665, 0.8578),
-  Bal_Accuracy = c(0.8113, 0.7660, 0.8645, 0.8503, 0.8601, 0.8598)
+  Modelo = c(
+    etiqueta_modelo("kNN", modelo_knn),
+    etiqueta_modelo("Naive Bayes", modelo_nb),
+    etiqueta_modelo("Árbol", modelo_arbol),
+    etiqueta_modelo("Reg. Logística", modelo_rl),
+    etiqueta_modelo("SVM", modelo_svm),
+    etiqueta_modelo("Red Neuronal", modelo_nnet)
+  ),
+  ROC_CV = c(
+    mejor_roc_cv(modelo_knn),
+    mejor_roc_cv(modelo_nb),
+    mejor_roc_cv(modelo_arbol),
+    mejor_roc_cv(modelo_rl),
+    mejor_roc_cv(modelo_svm),
+    mejor_roc_cv(modelo_nnet)
+  ),
+  Sensibilidad = c(
+    unname(cm_knn$byClass["Sensitivity"]),
+    unname(cm_nb$byClass["Sensitivity"]),
+    unname(cm_arbol$byClass["Sensitivity"]),
+    unname(cm_rl$byClass["Sensitivity"]),
+    unname(cm_svm$byClass["Sensitivity"]),
+    unname(cm_nnet$byClass["Sensitivity"])
+  ),
+  Especificidad = c(
+    unname(cm_knn$byClass["Specificity"]),
+    unname(cm_nb$byClass["Specificity"]),
+    unname(cm_arbol$byClass["Specificity"]),
+    unname(cm_rl$byClass["Specificity"]),
+    unname(cm_svm$byClass["Specificity"]),
+    unname(cm_nnet$byClass["Specificity"])
+  ),
+  Bal_Accuracy = c(
+    unname(cm_knn$byClass["Balanced Accuracy"]),
+    unname(cm_nb$byClass["Balanced Accuracy"]),
+    unname(cm_arbol$byClass["Balanced Accuracy"]),
+    unname(cm_rl$byClass["Balanced Accuracy"]),
+    unname(cm_svm$byClass["Balanced Accuracy"]),
+    unname(cm_nnet$byClass["Balanced Accuracy"])
+  )
 )
 
 kable(resumen_modelos,
