@@ -728,7 +728,7 @@ cm_knn
 
 El escalado no se aplica. Naive Bayes calcula probabilidades condicionales por cada variable de forma independiente, por lo que la magnitud de los valores numéricos no afecta el resultado. Escalar no aporta nada y quita interpretabilidad.
 
-**Hiperparámetros:** `usekernel` — controla si las variables numéricas se modelan con una distribución gaussiana (`FALSE`) o con estimación de densidad por kernel (`TRUE`). Se prueban ambos valores. El parámetro `fL` es la corrección de Laplace; se prueba con 0 y con 1. También se prueba `adjust` para regular el ancho del kernel.
+**Hiperparámetros:** `usekernel` — controla si las variables numéricas se modelan con una distribución gaussiana (`FALSE`) o con estimación de densidad por kernel (`TRUE`). Se prueban ambos valores. El parámetro `fL` es la corrección de Laplace; se prueba con 0 y con 1. También se prueba `adjust` para regular el ancho del kernel: `0.5` produce una densidad más sensible (menos suavizada) y `1.0` corresponde al suavizado base.
 
 ```{r nb-modelo}
 #| message: false
@@ -756,7 +756,7 @@ modelo_nb <- train(
 ```
 
 ```{r nb-val}
-# Predicción sobre df_val
+# Predicción sobre df_val (en caret::train(method = "nb"), predict() devuelve factor de clases)
 pred_nb <- predict(modelo_nb, newdata = df_val)
 
 # Matriz de confusión con caret
