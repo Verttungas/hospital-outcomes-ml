@@ -15,7 +15,7 @@ Thumbs.db
 .positai
 
 *.html
+!reporte.html
 
 reporte_cache/
 reporte_files/
-reporte.html

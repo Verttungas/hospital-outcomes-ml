@@ -11,6 +11,9 @@ format:
     code-fold: true
     code-tools: true
 embed-resources: true
+execute:
+  warning: false
+  message: false
 editor: source
 date: 2026-05-12
 ---
@@ -328,6 +331,31 @@ cat(sprintf(
 ))
 ```
 
+## Patrones de captura por estado (top 5)
+
+Antes de corregir la anomalía detectada en el EDA para Sinaloa, conviene revisar los estadísticos de posición de PESO y ALTURA en los 5 estados con más observaciones. El objetivo es confirmar que el patrón anómalo de Sinaloa es único y no una práctica generalizada de captura compartida con otros estados.
+
+```{r top5-estados}
+df |>
+  group_by(ESTADO) |>
+  summarise(
+    n             = n(),
+    PESO_NA_pct   = round(100 * mean(is.na(PESO)), 1),
+    PESO_99_pct   = round(100 * mean(PESO == 99, na.rm = TRUE), 1),
+    PESO_med      = round(median(PESO, na.rm = TRUE), 1),
+    PESO_media    = round(mean(PESO,   na.rm = TRUE), 1),
+    ALTURA_NA_pct = round(100 * mean(is.na(ALTURA)), 1),
+    ALTURA_med    = round(median(ALTURA, na.rm = TRUE), 1),
+    ALTURA_media  = round(mean(ALTURA,   na.rm = TRUE), 1),
+    .groups = "drop"
+  ) |>
+  arrange(desc(n)) |>
+  slice_head(n = 5) |>
+  kable(caption = "PESO y ALTURA — estadísticos para los 5 estados con más observaciones")
+```
+
+El porcentaje `PESO_99_pct` confirma que la anomalía es exclusiva de Sinaloa: cualquier estado con un porcentaje significativo (>5 %) de registros exactos en 99 kg estaría usando ese valor como predeterminado del sistema de captura. En el resto de los estados top, ese porcentaje es cercano a 0 % y las medias/medianas son biológicamente plausibles. La corrección que se aplica a continuación es, por lo tanto, específica para Sinaloa.
+
 ## Corrección de la anomalía de Sinaloa (PESO = 99)
 
 Durante el análisis exploratorio se identificó que el 39.2% de los registros del estado de Sinaloa tienen exactamente `PESO = 99.0`. Este valor corresponde al valor por defecto del sistema de captura hospitalaria, no a un peso real. Si no se corrige antes de calcular percentiles o imputar, este valor artificial inflaría los estadísticos de posición y contaminaría la imputación de todos los demás registros.
@@ -543,7 +571,7 @@ df |>
 
 Con todas las transformaciones aplicadas, se codifican las variables al tipo correcto para que `caret` las interprete adecuadamente. `EGRESO` mantiene "Defuncion" como primer nivel (clase positiva). La columna `CIE10` original se elimina — ya está representada por `CIE10_CAP`.
 
-Los NA restantes en `EDAD` (n=1) y `DIAS_ESTANCIA` (n=875) corresponden a los valores extremos convertidos en la sección anterior. Se imputarán por mediana dentro de cada pliegue de validación cruzada mediante `preProcess = "medianImpute"` en `caret::train()`, evitando así data leakage.
+Los NA restantes en `EDAD` (n=1) y `DIAS_ESTANCIA` (n=875) corresponden a los valores extremos convertidos en la sección anterior. Se imputarán por la mediana del conjunto de entrenamiento al inicio de la Parte 3 — calculada solo sobre `df_train` y aplicada a `df_val` y `df_test`, evitando data leakage. Se prefiere esta vía a `preProcess = "medianImpute"` dentro de los pliegues porque `caret::predict.train` por defecto descarta filas con `NA` (`na.action = na.omit`), lo que rompería la correspondencia entre predicciones y etiquetas en `df_val` y `df_test`.
 
 ```{r}
 df <- df |>
@@ -647,7 +675,7 @@ Para que la comparación entre los seis algoritmos sea válida, todos comparten 
 -   **Misma métrica de selección:** ROC-AUC. Se elige sobre Accuracy porque con clases desbalanceadas la exactitud es engañosa — un clasificador que predice siempre Mejoría alcanza 80.9% de accuracy sin aprender nada.
 -   **Mismo caso positivo:** Defunción.
 -   **Escalado:** se decide por modelo. kNN, Regresión Logística, SVM y Red Neuronal requieren escalado porque son sensibles a la magnitud de las variables. Árboles y Naive Bayes no lo requieren.
--   **NAs residuales:** los 876 NA en `EDAD` y `DIAS_ESTANCIA` se imputan por mediana dentro de cada pliegue usando `preProcess = "medianImpute"`, evitando data leakage.
+-   **NAs residuales:** los 876 NA en `EDAD` y `DIAS_ESTANCIA` se imputan con la mediana de `df_train` al inicio de la Parte 3 (no dentro de los pliegues), aplicando ese mismo valor a `df_val` y `df_test`. Esto evita data leakage y evita que `predict.train` descarte filas con NA.
 
 El conjunto `df_val` se usará para comparar modelos entre sí durante el desarrollo. El conjunto `df_test` queda reservado exclusivamente para la Parte 4.
 
@@ -669,12 +697,27 @@ library(NeuralNetTools) # Visualización de red neuronal
 ctrl_cv
 
 # Los NAs residuales en EDAD y DIAS_ESTANCIA (<1% de los datos)
-# se imputan dentro de cada pliegue vía preProcess = "medianImpute"
+# se imputan con la mediana de df_train abajo, antes de entrenar.
 
 # Naive Bayes no maneja factores ordenados, se convierte MES_INGRESO a factor nominal sin perder la información
 df_train$MES_INGRESO <- factor(df_train$MES_INGRESO, ordered = FALSE)
 df_val$MES_INGRESO   <- factor(df_val$MES_INGRESO,   ordered = FALSE)
 df_test$MES_INGRESO  <- factor(df_test$MES_INGRESO,  ordered = FALSE)
+
+# Imputación de NAs residuales en EDAD y DIAS_ESTANCIA (<1% de los datos).
+# La mediana se calcula sobre df_train y se aplica a los tres conjuntos para
+# evitar data leakage (la mediana de df_val o df_test nunca alimenta el modelo).
+# Se hace aquí en lugar de via preProcess="medianImpute" para que predict()
+# no descarte filas con NA por su na.action=na.omit por defecto.
+med_edad <- median(df_train$EDAD,          na.rm = TRUE)
+med_dias <- median(df_train$DIAS_ESTANCIA, na.rm = TRUE)
+
+for (nombre in c("df_train", "df_val", "df_test")) {
+  tmp <- get(nombre)
+  tmp$EDAD          <- ifelse(is.na(tmp$EDAD),          med_edad, tmp$EDAD)
+  tmp$DIAS_ESTANCIA <- ifelse(is.na(tmp$DIAS_ESTANCIA), med_dias, tmp$DIAS_ESTANCIA)
+  assign(nombre, tmp)
+}
 
 cat(sprintf("df_train: %d filas\n", nrow(df_train)))
 cat(sprintf("df_val:   %d filas\n", nrow(df_val)))
@@ -684,27 +727,17 @@ cat(sprintf("df_test:  %d filas\n", nrow(df_test)))
 
 ## Modelo 1: k-Nearest Neighbors (kNN)
 
-El escalado es obligatorio. kNN calcula distancias euclidianas entre observaciones, por lo que una variable en centímetros dominaría completamente a una variable en unidades pequeñas si no se estandarizan. Se aplica `preProcess = c("medianImpute", "center", "scale")`.
+El escalado es obligatorio. kNN calcula distancias euclidianas entre observaciones, por lo que una variable en centímetros dominaría completamente a una variable en unidades pequeñas si no se estandarizan. Se aplica `preProcess = c("center", "scale")`.
 
 **Hiperparámetros:** `k` (número de vecinos). Se prueban valores impares del 3 al 15 para evitar empates en un problema binario.
 
 ```{r knn-modelo}
 #| message: false
 #| warning: false
-#| cache: true
 
-parametros_knn <- expand.grid(k = seq(3, 15, 2))
-
-modelo_knn <- train(
-  EGRESO ~ .,
-  data       = df_train,
-  method     = "knn",
-  preProcess = c("medianImpute", "center", "scale"),
-  tuneGrid   = parametros_knn,
-  trControl  = ctrl_cv,
-  metric     = "ROC"
-)
-
+# Modelos pre-entrenados en `scripts/entrenar_modelos.R` (rejilla:
+# k = seq(3, 15, 2); preProcess = center + scale)
+modelo_knn <- readRDS("models/modelo_knn.rds")
 modelo_knn
 ```
 
@@ -734,25 +767,12 @@ El escalado no se aplica. Naive Bayes calcula probabilidades condicionales por c
 #| message: false
 #| warning: false
 
-library(klaR)
-
-set.seed(2711)
-
-parametros_nb <- expand.grid(
-  fL        = c(0, 1),
-  usekernel = c(TRUE, FALSE),
-  adjust    = c(0.5, 1.0)
-)
-
-modelo_nb <- train(
-  EGRESO ~ .,
-  data       = df_train,
-  method     = "nb",
-  tuneGrid   = parametros_nb,
-  preProcess = c("medianImpute"),
-  trControl  = ctrl_cv,
-  metric     = "ROC"
-)
+# Pre-entrenado con la interfaz x/y (no fórmula) para evitar el mismatch de
+# variable names que klaR produce con factores de muchos niveles
+# (CIE10_CAP, ASEGURADO_GRP, REGION) en algunas particiones de CV.
+# Rejilla: fL ∈ {0,1}, usekernel ∈ {TRUE,FALSE}, adjust ∈ {0.5,1.0}.
+modelo_nb <- readRDS("models/modelo_nb.rds")
+modelo_nb
 ```
 
 ```{r nb-val}
@@ -776,25 +796,9 @@ El escalado no se aplica. Los árboles de decisión toman decisiones basadas en 
 ```{r arbol-modelo}
 #| message: false
 #| warning: false
-#| cache: true
 
-library(rpart)
-library(rpart.plot)
-
-set.seed(2711)
-
-parametros_arbol <- expand.grid(cp = c(0.0001, 0.0005, 0.001, 0.005, 0.01))
-
-modelo_arbol <- train(
-  EGRESO ~ .,
-  data      = df_train,
-  method    = "rpart",
-  preProcess = c("medianImpute"),
-  tuneGrid  = parametros_arbol,
-  trControl = ctrl_cv,
-  metric    = "ROC"
-)
-
+# Pre-entrenado; rejilla cp ∈ {1e-4, 5e-4, 1e-3, 5e-3, 1e-2}
+modelo_arbol <- readRDS("models/modelo_arbol.rds")
 modelo_arbol
 plot(modelo_arbol, main = "Árbol — ROC-AUC por cp")
 ```
@@ -826,20 +830,9 @@ El escalado sí se aplica. Aunque la regresión logística puede funcionar sin e
 ```{r rl-modelo}
 #| message: false
 #| warning: false
-#| cache: true
 
-set.seed(2711)
-
-modelo_rl <- train(
-  EGRESO ~ .,
-  data       = df_train,
-  method     = "glm",
-  family     = "binomial",
-  preProcess = c("medianImpute", "center", "scale"),
-  trControl  = ctrl_cv,
-  metric     = "ROC"
-)
-
+# Pre-entrenado; regresión logística no tiene hiperparámetros que afinar.
+modelo_rl <- readRDS("models/modelo_rl.rds")
 summary(modelo_rl$finalModel)
 ```
 
@@ -857,32 +850,16 @@ cm_rl
 
 ## Modelo 5: Máquinas de Vector Soporte (SVM)
 
-El escalado sí es obligatorio porque SVM construye hiperplanos de separación basándose en distancias entre puntos — si las variables tienen magnitudes muy distintas, las de mayor escala dominarían el cálculo. En este reporte se aplica desde `caret::train()` con `preProcess = c("medianImpute", "center", "scale")`.
+El escalado sí es obligatorio porque SVM construye hiperplanos de separación basándose en distancias entre puntos — si las variables tienen magnitudes muy distintas, las de mayor escala dominarían el cálculo. En este reporte se aplica desde `caret::train()` con `preProcess = c("center", "scale")`.
 
-**Hiperparámetros:** el kernel radial (RBF) es el más versátil según lo visto en clase. Sus dos parámetros son `C` (penalización por clasificaciones incorrectas) y `sigma` (amplitud del kernel radial). Se prueban valores típicos de ambos.
+**Hiperparámetros:** el kernel radial (RBF) es el más versátil según lo visto en clase. Sus dos parámetros son `C` (penalización por clasificaciones incorrectas) y `sigma` (amplitud del kernel radial). Por el tamaño del CE (~55 k filas tras upsampling) y la complejidad cuadrática de SVM en `kernlab`, se acota la rejilla a dos valores de `C` con `sigma = 0.1` (kernel suficientemente amplio para que el número de vectores de soporte se mantenga manejable). La rejilla refinada de la Parte 3.7 explora valores alternativos en torno al mejor punto.
 
 ```{r svm-modelo}
 #| message: false
 #| warning: false
-#| cache: true
 
-library(e1071)
-
-parametros_svm <- expand.grid(
-  C     = c(0.1, 1, 10),
-  sigma = c(0.01, 0.1)
-)
-
-modelo_svm <- train(
-  EGRESO ~ .,
-  data       = df_train,
-  method     = "svmRadial",
-  preProcess = c("medianImpute", "center", "scale"),
-  tuneGrid   = parametros_svm,
-  trControl  = ctrl_cv,
-  metric     = "ROC"
-)
-
+# Pre-entrenado; rejilla C ∈ {1, 10}, sigma = 0.1
+modelo_svm <- readRDS("models/modelo_svm.rds")
 modelo_svm
 plot(modelo_svm, main = "SVM — ROC-AUC por C y sigma")
 ```
@@ -906,28 +883,9 @@ El escalado sí es obligatorio. Las redes neuronales usan gradiente descendente 
 ```{r nnet-modelo}
 #| message: false
 #| warning: false
-#| cache: true
 
-library(nnet)
-
-parametros_nnet <- expand.grid(
-  size  = c(5, 10, 15),
-  decay = c(0.001, 0.01, 0.1)
-)
-
-modelo_nnet <- train(
-  EGRESO ~ .,
-  data       = df_train,
-  method     = "nnet",
-  preProcess = c("medianImpute", "range"),
-  tuneGrid   = parametros_nnet,
-  trControl  = ctrl_cv,
-  metric     = "ROC",
-  MaxNWts    = 2000,
-  maxit      = 200,
-  trace      = FALSE
-)
-
+# Pre-entrenado; rejilla size ∈ {5, 10}, decay ∈ {0.01, 0.1}, maxit = 120
+modelo_nnet <- readRDS("models/modelo_nnet.rds")
 modelo_nnet
 plot(modelo_nnet, main = "Red Neuronal — ROC-AUC por size y decay")
 ```
@@ -1009,13 +967,376 @@ kable(resumen_modelos,
       caption = "Comparación de los seis modelos en df_val")
 ```
 
-Los modelos candidatos son **SVM** (mejor ROC-AUC en CV: 0.9351) y **Árbol de decisión** (mejor sensibilidad: 0.8987 — detecta más defunciones reales). Dado que el objetivo clínico es identificar correctamente los casos de Defunción, se priorizan ambos para evaluación final.
+La tabla comparativa muestra que la **Red Neuronal** logró el mejor ROC-AUC en CV (~0.946), seguida por **Regresión Logística** y el **Árbol** refinado. Para la evaluación final sobre CP se priorizan tres modelos: la **Red Neuronal** por desempeño, el **Árbol refinado** por interpretabilidad clínica, y el **SVM Radial** para contraste de un kernel no lineal. La Parte 3.7 refina hiperparámetros del SVM y del Árbol; la Red Neuronal se mantiene con la mejor combinación encontrada en su rejilla base (`size = 10, decay = 0.1`).
+
+## Afinamiento adicional de los modelos candidatos
+
+Los dos finalistas provienen de una rejilla razonable pero estándar. En esta sección se aplican dos refinamientos para intentar mejorar su desempeño, **recordando que el caso positivo es Defunción**:
+
+1.  **Rejilla refinada** alrededor del mejor punto encontrado en la Parte 3 — sirve para confirmar que ya estamos en el óptimo local de la rejilla inicial o, si no, mejorarlo.
+2.  **Optimización del umbral de decisión** mediante el índice de Youden sobre `df_val`. El umbral por defecto de 0.5 trata por igual sensibilidad y especificidad, pero con desbalance 19/81 conviene desplazarlo para maximizar `Sensibilidad + Especificidad − 1`. Se calcula sobre `df_val` para no inducir sesgo de entrenamiento y para no contaminar el conjunto de prueba.
+
+```{r}
+#| message: false
+#| warning: false
+library(pROC)
+```
+
+### Refinamiento de SVM
+
+```{r svm-fino}
+#| message: false
+#| warning: false
+
+# Pre-entrenado; rejilla refinada alrededor del mejor C de la rejilla base,
+# fijando sigma al óptimo de la base (ver scripts/entrenar_modelos.R).
+modelo_svm_fino <- readRDS("models/modelo_svm_fino.rds")
+
+tibble(
+  Fase   = c("Inicial", "Refinada"),
+  C      = c(modelo_svm$bestTune$C,     modelo_svm_fino$bestTune$C),
+  sigma  = c(modelo_svm$bestTune$sigma, modelo_svm_fino$bestTune$sigma),
+  ROC_CV = c(max(modelo_svm$results$ROC,      na.rm = TRUE),
+             max(modelo_svm_fino$results$ROC, na.rm = TRUE))
+) |> kable(digits = 4, caption = "SVM — rejilla inicial vs refinada")
+```
+
+### Refinamiento del Árbol
+
+```{r arbol-fino}
+#| message: false
+#| warning: false
+
+# Pre-entrenado; rejilla refinada cp = best_cp × {0.25, 0.5, 1, 2, 4}.
+modelo_arbol_fino <- readRDS("models/modelo_arbol_fino.rds")
+
+tibble(
+  Fase   = c("Inicial", "Refinada"),
+  cp     = c(modelo_arbol$bestTune$cp, modelo_arbol_fino$bestTune$cp),
+  ROC_CV = c(max(modelo_arbol$results$ROC,      na.rm = TRUE),
+             max(modelo_arbol_fino$results$ROC, na.rm = TRUE))
+) |> kable(digits = 4, caption = "Árbol — rejilla inicial vs refinada")
+```
+
+### Umbral óptimo por índice de Youden
+
+```{r umbral-youden}
+#| message: false
+#| warning: false
+
+calcular_youden <- function(modelo, datos) {
+  prob <- predict(modelo, datos, type = "prob")[, "Defuncion"]
+  r <- roc(datos$EGRESO, prob,
+           levels = c("Mejoria", "Defuncion"),
+           direction = "<", quiet = TRUE)
+  c <- coords(r, "best", best.method = "youden",
+              ret = c("threshold", "sensitivity", "specificity"))
+  list(roc    = r,
+       umbral = as.numeric(c$threshold),
+       sens   = as.numeric(c$sensitivity),
+       spec   = as.numeric(c$specificity),
+       auc    = as.numeric(auc(r)))
+}
+
+youden_svm   <- calcular_youden(modelo_svm_fino,   df_val)
+youden_arbol <- calcular_youden(modelo_arbol_fino, df_val)
+youden_nn    <- calcular_youden(modelo_nnet,       df_val)
+
+tibble(
+  Modelo         = c("SVM", "Árbol", "Red Neuronal"),
+  `AUC (val)`    = c(youden_svm$auc,    youden_arbol$auc,   youden_nn$auc),
+  Umbral         = c(youden_svm$umbral, youden_arbol$umbral, youden_nn$umbral),
+  Sensibilidad   = c(youden_svm$sens,   youden_arbol$sens,  youden_nn$sens),
+  Especificidad  = c(youden_svm$spec,   youden_arbol$spec, youden_nn$spec)
+) |> kable(digits = 4,
+           caption = "Umbrales óptimos por Youden sobre df_val")
+```
+
+Estos umbrales se aplican en la Parte 4 al conjunto de prueba `df_test`.
 
 ------------------------------------------------------------------------
 
-Referencias
+# Parte 4: Evaluación final sobre el conjunto de prueba
+
+Con los modelos refinados y los umbrales óptimos definidos, se aplica una única vez la predicción a `df_test` — conjunto reservado desde la Parte 2 que **no se ha tocado** hasta este momento. Esta es la estimación honesta del desempeño esperado sobre datos nuevos.
+
+## SVM en CP
+
+```{r svm-cp}
+#| message: false
+#| warning: false
+
+prob_svm_test <- predict(modelo_svm_fino, df_test, type = "prob")[, "Defuncion"]
+
+pred_svm_05 <- factor(
+  ifelse(prob_svm_test >= 0.5, "Defuncion", "Mejoria"),
+  levels = c("Defuncion", "Mejoria")
+)
+pred_svm_y <- factor(
+  ifelse(prob_svm_test >= youden_svm$umbral, "Defuncion", "Mejoria"),
+  levels = c("Defuncion", "Mejoria")
+)
+
+cm_svm_cp_05 <- confusionMatrix(pred_svm_05, df_test$EGRESO,
+                                positive = "Defuncion", mode = "everything")
+cm_svm_cp_y  <- confusionMatrix(pred_svm_y,  df_test$EGRESO,
+                                positive = "Defuncion", mode = "everything")
+
+cat("--- SVM | umbral 0.5 ---\n")
+print(cm_svm_cp_05$table)
+cat(sprintf("\n--- SVM | umbral Youden (%.3f) ---\n", youden_svm$umbral))
+print(cm_svm_cp_y$table)
+```
+
+## Árbol en CP
+
+```{r arbol-cp}
+#| message: false
+#| warning: false
+
+prob_arbol_test <- predict(modelo_arbol_fino, df_test, type = "prob")[, "Defuncion"]
+
+pred_arbol_05 <- factor(
+  ifelse(prob_arbol_test >= 0.5, "Defuncion", "Mejoria"),
+  levels = c("Defuncion", "Mejoria")
+)
+pred_arbol_y <- factor(
+  ifelse(prob_arbol_test >= youden_arbol$umbral, "Defuncion", "Mejoria"),
+  levels = c("Defuncion", "Mejoria")
+)
+
+cm_arbol_cp_05 <- confusionMatrix(pred_arbol_05, df_test$EGRESO,
+                                  positive = "Defuncion", mode = "everything")
+cm_arbol_cp_y  <- confusionMatrix(pred_arbol_y,  df_test$EGRESO,
+                                  positive = "Defuncion", mode = "everything")
+
+cat("--- Árbol | umbral 0.5 ---\n")
+print(cm_arbol_cp_05$table)
+cat(sprintf("\n--- Árbol | umbral Youden (%.3f) ---\n", youden_arbol$umbral))
+print(cm_arbol_cp_y$table)
+```
+
+## Red Neuronal en CP
+
+```{r nn-cp}
+#| message: false
+#| warning: false
+
+prob_nn_test <- predict(modelo_nnet, df_test, type = "prob")[, "Defuncion"]
+
+pred_nn_05 <- factor(
+  ifelse(prob_nn_test >= 0.5, "Defuncion", "Mejoria"),
+  levels = c("Defuncion", "Mejoria")
+)
+pred_nn_y <- factor(
+  ifelse(prob_nn_test >= youden_nn$umbral, "Defuncion", "Mejoria"),
+  levels = c("Defuncion", "Mejoria")
+)
+
+cm_nn_cp_05 <- confusionMatrix(pred_nn_05, df_test$EGRESO,
+                                positive = "Defuncion", mode = "everything")
+cm_nn_cp_y  <- confusionMatrix(pred_nn_y,  df_test$EGRESO,
+                                positive = "Defuncion", mode = "everything")
+
+cat("--- Red Neuronal | umbral 0.5 ---\n")
+print(cm_nn_cp_05$table)
+cat(sprintf("\n--- Red Neuronal | umbral Youden (%.3f) ---\n", youden_nn$umbral))
+print(cm_nn_cp_y$table)
+```
+
+## Comparación final SVM vs Árbol vs Red Neuronal en CP
+
+```{r comp-cp}
+#| message: false
+#| warning: false
+
+roc_svm_cp   <- roc(df_test$EGRESO, prob_svm_test,
+                    levels = c("Mejoria","Defuncion"),
+                    direction = "<", quiet = TRUE)
+roc_arbol_cp <- roc(df_test$EGRESO, prob_arbol_test,
+                    levels = c("Mejoria","Defuncion"),
+                    direction = "<", quiet = TRUE)
+roc_nn_cp    <- roc(df_test$EGRESO, prob_nn_test,
+                    levels = c("Mejoria","Defuncion"),
+                    direction = "<", quiet = TRUE)
+
+fila_cm <- function(modelo, umbral, auc_val, cm) {
+  tibble(
+    Modelo        = modelo,
+    Umbral        = umbral,
+    AUC           = auc_val,
+    Accuracy      = unname(cm$overall["Accuracy"]),
+    Sensibilidad  = unname(cm$byClass["Sensitivity"]),
+    Especificidad = unname(cm$byClass["Specificity"]),
+    F1            = unname(cm$byClass["F1"]),
+    Bal_Accuracy  = unname(cm$byClass["Balanced Accuracy"])
+  )
+}
+
+resultados_cp <- bind_rows(
+  fila_cm("SVM",          "0.5",    as.numeric(auc(roc_svm_cp)),   cm_svm_cp_05),
+  fila_cm("SVM",          "Youden", as.numeric(auc(roc_svm_cp)),   cm_svm_cp_y),
+  fila_cm("Árbol",        "0.5",    as.numeric(auc(roc_arbol_cp)), cm_arbol_cp_05),
+  fila_cm("Árbol",        "Youden", as.numeric(auc(roc_arbol_cp)), cm_arbol_cp_y),
+  fila_cm("Red Neuronal", "0.5",    as.numeric(auc(roc_nn_cp)),    cm_nn_cp_05),
+  fila_cm("Red Neuronal", "Youden", as.numeric(auc(roc_nn_cp)),    cm_nn_cp_y)
+)
+
+kable(resultados_cp, digits = 4,
+      caption = "Desempeño en CP — SVM vs Árbol vs Red Neuronal, umbrales 0.5 y Youden")
+```
+
+```{r roc-cp-plot}
+#| message: false
+#| warning: false
+#| fig-height: 5
+
+plot(roc_nn_cp, col = "#2ca25f", lwd = 2, legacy.axes = TRUE,
+     main = "Curvas ROC en el conjunto de prueba (CP)")
+lines(roc_arbol_cp, col = "#d6604d", lwd = 2)
+lines(roc_svm_cp,   col = "#4393c3", lwd = 2)
+legend("bottomright", lwd = 2,
+       col = c("#2ca25f", "#d6604d", "#4393c3"),
+       legend = c(
+         sprintf("Red Neuronal (AUC = %.3f)", as.numeric(auc(roc_nn_cp))),
+         sprintf("Árbol        (AUC = %.3f)", as.numeric(auc(roc_arbol_cp))),
+         sprintf("SVM          (AUC = %.3f)", as.numeric(auc(roc_svm_cp)))
+       ))
+```
+
+## Planteamiento del problema y elección del modelo final
+
+El problema se plantea formalmente así: dado un vector `x` con las variables demográficas (EDAD, GENERO, REGION), clínicas (PESO, ALTURA, INFECCION, ACCIDENTE, DIAS_ESTANCIA), administrativas (ASEGURADO_GRP, INDIGENA, MES_INGRESO) y de capítulo CIE-10 del paciente al ingreso, el modelo entrega `P(Defunción | x)`. Si esa probabilidad supera el umbral Youden establecido sobre `df_val`, el caso se etiqueta como **alto riesgo de defunción** y debe priorizarse para revisión clínica intensiva.
+
+A partir de la tabla anterior, el **modelo elegido para producción es la Red Neuronal** (`size = 10, decay = 0.1`). Razones:
+
+1.  Tiene el mayor AUC en CP de los tres modelos evaluados — discrimina mejor a través de todos los umbrales posibles, no solo en uno.
+2.  Con el umbral Youden alcanza la mejor combinación de sensibilidad y especificidad — equilibrio preferible para un sistema de tamizaje hospitalario donde el costo de no detectar una defunción supera al de revisar un caso extra.
+3.  El Árbol refinado queda como **modelo alternativo interpretable**: su AUC en CP es competitivo y su estructura de reglas permite explicar al personal clínico exactamente qué combinación de capítulo CIE-10, edad y días de estancia disparan una alerta.
+
+## Importancia de variables
+
+El SVM Radial no tiene importancia de variables directamente interpretable porque transforma los datos al espacio del kernel y la decisión depende de los vectores de soporte, no de coeficientes lineales por variable. Se muestra la importancia del Árbol refinado, que sí ofrece una jerarquía clara basada en reducción de impureza de Gini:
+
+```{r imp-arbol}
+#| message: false
+#| warning: false
+#| fig-height: 6
+
+imp_arbol <- varImp(modelo_arbol_fino, scale = TRUE)
+plot(imp_arbol, top = 20, main = "Top 20 — Importancia de variables (Árbol)")
+```
+
+## Relación con el catálogo CIE-10
+
+La hipótesis del EDA era que el capítulo CIE-10 sería el predictor más informativo. Al desglosar el desempeño de la Red Neuronal por capítulo, se confirma:
+
+```{r cie10-perf}
+#| message: false
+#| warning: false
+
+df_test |>
+  mutate(
+    prob_def = prob_nn_test,
+    pred     = pred_nn_y,
+    acierto  = pred == EGRESO
+  ) |>
+  group_by(CIE10_CAP) |>
+  summarise(
+    n             = n(),
+    tasa_real     = mean(EGRESO == "Defuncion"),
+    tasa_predicha = mean(pred == "Defuncion"),
+    sensibilidad  = sum(pred == "Defuncion" & EGRESO == "Defuncion") /
+                    pmax(sum(EGRESO == "Defuncion"), 1),
+    accuracy      = mean(acierto)
+  ) |>
+  arrange(desc(n)) |>
+  kable(digits = 3,
+        caption = "Desempeño de la Red Neuronal por capítulo CIE-10 (CP, umbral Youden)")
+```
+
+## Interpretación clínica
+
+Los resultados respaldan tres lecturas:
+
+1.  **CIE-10 es el predictor estructural.** Los capítulos con mayor mortalidad real en el EDA (XVIII Síntomas y signos anormales, I Infecciosas, IX Circulatorio, II Neoplasias, X Respiratorio) son los mismos donde el modelo asigna mayor probabilidad de defunción — confirma que aprendió la señal médica correcta. En el extremo opuesto, en capítulos con mortalidad casi nula (XV Embarazo, VII Ojo, VIII Oído) el modelo prácticamente nunca predice defunción.
+
+2.  **El trade-off sensibilidad/especificidad es ajustable y se ajustó.** El umbral Youden eleva la sensibilidad muy por encima del umbral 0.5 a cambio de algo de especificidad. Para un sistema de tamizaje hospitalario, donde el costo de una defunción no detectada es mucho mayor que el de revisar a un paciente extra, este trade-off es el deseable.
+
+3.  **Limitaciones a tener presente.** El modelo se entrenó con datos de 2014 con sesgos de registro conocidos (Tabasco, Coahuila y SLP enviaron solo defunciones; Sinaloa registró PESO por defecto; varias entidades quedaron por debajo del umbral de 10 observaciones). La generalización fuera de ese año y régimen institucional debe validarse antes de cualquier uso real. Tampoco hay validación temporal: el CP se muestreó al azar, no por mes o trimestre.
+
+------------------------------------------------------------------------
+
+# Parte 5: Implementación
+
+El script autónomo de despliegue se encuentra en `scripts/predecir_TF.R`. Ejecuta de forma independiente del reporte y replica todo el pipeline:
+
+1.  Lee `data/pruebaTF.csv` (archivo que provee la profesora).
+2.  Aplica las mismas transformaciones que la Parte 2 (mapeo CIE-10 → capítulos, eliminación de categorías escasas, corrección de la anomalía de Sinaloa, recorte por percentiles, imputación por mediana de grupo, agrupación de ESTADO en regiones y ASEGURADO en 6 grupos, binarización de ACCIDENTE).
+3.  Divide CE/CP **60/40** con la semilla **2711**.
+4.  Aplica **upsampling** sobre CE para balancear clases.
+5.  Entrena una **Red Neuronal** (`nnet`) con los hiperparámetros establecidos en Parte 3 (`size = 10, decay = 0.1, maxit = 120`).
+6.  Aplica el modelo al CP.
+7.  Reporta Accuracy (vía `caret::confusionMatrix`) y ROC-AUC (vía `pROC::roc`).
+
+Uso:
+
+```bash
+Rscript scripts/predecir_TF.R
+```
+
+------------------------------------------------------------------------
+
+# Parte 6: Conclusiones por integrante
+
+Cada integrante aporta su reflexión personal sobre el proceso, dirigida a la experiencia, los logros, las equivocaciones, y lo esperado vs. lo inesperado como parte del aprendizaje.
+
+## Nicolás Barrón Sour
+
+Al iniciar este proyecto, la primera estrategia que me surgió fue desarrollar un modelo predictivo independiente para cada clasificación de enfermedad. Sin embargo, teniendo en cuenta las limitaciones de tiempo además de la poca cantidad de registros disponibles en la base de datos para algunas clasificaciones de enfermedades, rápidamente me di cuenta que esto no era viable en la práctica.
+
+A pesar de este cambio de enfoque, los resultados fueron muy buenos. Me sorprendió la habilidad de la red neuronal para capturar la importancia y las sutilezas de clasificación clínica de manera conjunta en un solo modelo. Desde la que entiendo en teoría, este comportamiento sugiere que el sistema se encuentra en el umbral de bases de [límite de error](https://en.wikipedia.org/wiki/Bayes_error_rate); no obstante, el cálculo matemático y la comprobación exacta de este límite quedan como una area de oportunidad para trabajos futuros.
+
+Más allá del la implementación del modelo, este ejercicio invita a una profunda reflexión sobre el futuro de la tecnología aplicada a la atención médica. Contemplando el poder de cómputo actual y los grandes avances en la creación de "gemelos digitales", a mi parecer resulta fácil llegar a plantearse la siguiente evolución en el equipo usado en los hospitales. Un escenario donde, mediante el uso del Internet de las Cosas (IoT), el equipo médico esté conectado a una red centralizada. Una infraestructura de esta naturaleza permitiría un monitoreo continuo de los pacientes y la emisión de avisos o diagnósticos preliminares impulsados directamente por algoritmos de predicción.
+
+Finalmente, la viabilidad e impacto de estos modelos de Machine Learning dependen del flujo de la información. Conforme sistemas interconectados como los descritos comiencen a implementarse en los hospitales, se creará un ciclo de mejora continua: el volumen y la calidad de los datos recopilados aumentarán significativamente. Esto garantizará que la red pueda entrenarse de mejor manera y alcance una capacidad sin precedentes para predecir resultados, optimizando así la toma de decisiones clínicas y el cuidado integral de la salud. Aunque este escenario parece ser utópico, una problema grande que se presenta es el derecho a la privacidad de los pacientes y el uso correcto de los datos sensibles al recolectar datos de esta manera.
+
+## Ximena Flores Martínez
+
+Iniciar este proyecto con la certeza de que se trataba de un problema de clasificación binaria resultó engañosamente sencillo. A medida que avanzamos en el análisis exploratorio, me di cuenta de que los datos no eran simplemente ruidosos, sino que contaban historias que no esperaba encontrar.
+
+Mi participación principal fue en la preparación de datos, y fue ahí donde más aprendí. Lo que más me marcó fue descubrir el sesgo de registro en estados como Tabasco, Coahuila y San Luis Potosí, donde las tasas de mortalidad superaban el 97%. Mi primera reacción fue asumir que algo estaba mal en el código, porque no había una razón clínica ni geográfica obvia que los conectara. No son estados con un perfil epidemiológico particularmente similar, ni comparten región ni características socioeconómicas evidentes. Eso me obligó a replantear una suposición que daba por sentada: que los datos reflejan la realidad. En este caso, reflejaban una práctica administrativa, no una verdad médica, y limpiar eso correctamente fue clave para que los modelos posteriores tuvieran sentido.
+
+Una de las discusiones más interesantes que tuvimos como equipo fue precisamente al momento de afinar los modelos: ¿hasta dónde intentar mejorar el rendimiento antes de caer en overfitting? No siempre hubo una respuesta clara, y aprender a convivir con esa incertidumbre fue parte del proceso. Al final, la Red Neuronal alcanzó un AUC de 0.949, un resultado que honestamente no anticipábamos.
+
+En retrospectiva, este proyecto me enseñó que el trabajo más importante en Machine Learning no ocurre al momento de entrenar modelos, sino antes: en el momento de entender qué significan los datos, quién los registró y por qué.
+
+## Carlos Vertti
+
+El desarrollo de la fase de machine learning (desde que conceptualizamos los modelos hasta optimizarlos al detalle) nos mostró algo clave que es que para abordar de verdad los egresos hospitalarios de la SSA, lo fundamental es saber tratar bien el desbalance de clases. Cuando implementamos de forma estratégica el upsampling de la clase positiva dentro de cada pliegue de validación cruzada, conseguimos evitar que los algoritmos se quedaran atrapados en la clase mayoritaria y eso nos permitió mapear con precisión los patrones que se asociaban a las defunciones.
+
+Después de un proceso exhausto de entrenamiento y ajuste de hiperparámetros vimos que los modelos con capacidad no lineal (específicamente la Red Neuronal y el Árbol refinado) superaban de forma contundente a las aproximaciones más simples como la Regresión Logística y kNN. Cuando evaluamos el desempeño a través del Área Bajo la Curva (AUC-ROC) conseguimos un balance bastante óptimo entre sensibilidad y especificidad. Y al final, determinar el umbral de clasificación óptimo mediante el Índice de Youden fue lo que le dió valor predictivo real al proyecto, convirtiendo un modelo matemático abstracto en una herramienta de verdad viable para soporte clínico e intervención temprana en salud pública acá en México.
+
+## Paloma Gutiérrez
+
+Lo que más me sorprendió durante el desarrollo del proyecto fue el tiempo que tarda entrenar un modelo. Me queda claro que la teoría de clase y la realidad de correr algoritmos sobre un número tan grande de registros son cosas muy distintas, y por ejemplo, SVM y kNN con el conjunto completo acabaron siendo inviables en mi computadora, y tuve que aprender a tomar decisiones prácticas que en los ejemplos de clase nunca se presentan porque los datos son pequeños.
+
+Aunque ya habíamos explorado esto a fondo en clase, fue muy diferente darme cuenta en la práctica que asumir que más accuracy significaba mejor modelo, cuando realmente no lo es. Con clases tan desbalanceadas, predecir siempre "mejoría" te da 80.9% de accuracy sin aprender nada, y eso lo entendí bien hasta que vi los números en la tabla.
+
+La parte que no esperaba fue que la Red Neuronal terminara ganando, siendo que la entrenamos con apenas 4 combinaciones de hiperparámetros por el tiempo de cómputo. Me queda la duda de cuánto mejor hubiera sido con una rejilla más amplia, pero eso también dice algo sobre la calidad del preprocesamiento que hicimos como equipo.
+
+Al final, el proyecto me gustó porque poner en práctica lo aprendido teóricamente, siempre va a ser mucho mas divertido y por lo menos para mi, mucho más enriquecedor porque logro entender los problemas que se ocasionan, porque y como resolverlos, fuera de solo tenerlo como regla memorizada de clase.
+
+------------------------------------------------------------------------
+
+# Referencias
 
 -   Organización Mundial de la Salud. (2016). *Clasificación Internacional de Enfermedades, 10.ª revisión (CIE-10).* https://icd.who.int/browse10/2019/en
--   Secretaría de Salud. (2014). *Registro de Egresos Hospitalarios*. DGIS. https://www.gob.mx/salud
+-   Secretaría de Salud, Dirección General de Información en Salud. (2014). *Registro de Egresos Hospitalarios — Subsistema Automatizado de Egresos Hospitalarios (SAEH)*. https://www.gob.mx/salud
 -   Kuhn, M. (2024). *The caret Package*. https://topepo.github.io/caret/
+-   Robin, X., Turck, N., Hainard, A., Tiberti, N., Lisacek, F., Sanchez, J.-C., & Müller, M. (2011). pROC: an open-source package for R and S+ to analyze and compare ROC curves. *BMC Bioinformatics, 12*, 77.
+-   Youden, W. J. (1950). Index for rating diagnostic tests. *Cancer, 3*(1), 32–35.
+-   Chawla, N. V., Bowyer, K. W., Hall, L. O., & Kegelmeyer, W. P. (2002). SMOTE: Synthetic Minority Over-sampling Technique. *Journal of Artificial Intelligence Research, 16*, 321–357.
+-   Cortes, C., & Vapnik, V. (1995). Support-Vector Networks. *Machine Learning, 20*, 273–297.
+-   Breiman, L., Friedman, J. H., Stone, C. J., & Olshen, R. A. (1984). *Classification and Regression Trees*. CRC Press.
 -   Anthropic. (2026). Claude (claude-sonnet-4-6) \[Modelo de lenguaje grande\]. https://claude.ai
